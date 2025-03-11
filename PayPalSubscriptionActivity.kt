@@ -1,4 +1,4 @@
-package com.alarmreminderapp
+package com.alarmreminderapp.backend
 
 import android.app.Activity
 import android.content.Intent
@@ -10,8 +10,11 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.lifecycle.Observer
+import com.alarmreminderapp.R
 import com.alarmreminderapp.backend.SubscriptionResponse
+import com.alarmreminderapp.backend.PayPalApiClient // Ensure you have an API client to fetch subscription status
 
 class PayPalSubscriptionActivity : AppCompatActivity() {
 
@@ -23,6 +26,7 @@ class PayPalSubscriptionActivity : AppCompatActivity() {
   }
 
   private val viewModel: PayPalSubscriptionViewModel by viewModels()
+  private var subscriptionId: String? = null // Store subscription ID
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -33,7 +37,7 @@ class PayPalSubscriptionActivity : AppCompatActivity() {
 
     cancelButton.setOnClickListener {
       Toast.makeText(this, "Subscription process canceled.", Toast.LENGTH_SHORT).show()
-      finish() // Close the activity
+      finish()
     }
 
     subscriptionDetailsTextView.text = "Initiating PayPal subscription..."
@@ -55,9 +59,12 @@ class PayPalSubscriptionActivity : AppCompatActivity() {
   }
 
   private fun handleSubscriptionResponse(response: SubscriptionResponse?) {
-    if (response?.approvalUrl != null) {
-      val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(response.approvalUrl))
-      startActivity(browserIntent)
+    if (response?.approvalUrl != null && response.subscriptionId != null) {
+      subscriptionId = response.subscriptionId // Store Subscription ID
+
+      // Open the approval URL using Chrome Custom Tabs for a smoother experience
+      val customTabsIntent = CustomTabsIntent.Builder().build()
+      customTabsIntent.launchUrl(this, Uri.parse(response.approvalUrl))
     } else {
       Toast.makeText(this, "Failed to retrieve approval URL.", Toast.LENGTH_SHORT).show()
       finish()
@@ -69,10 +76,27 @@ class PayPalSubscriptionActivity : AppCompatActivity() {
     intent.data?.let { uri ->
       if (uri.scheme == APP_SCHEME) {
         when (uri.path) {
-          "/subscription/success" -> handleSubscriptionSuccess()
+          "/subscription/success" -> checkSubscriptionStatus()
           "/subscription/cancel" -> handleSubscriptionCancel()
           else -> handleSubscriptionError()
         }
+      }
+    }
+  }
+
+  private fun checkSubscriptionStatus() {
+    if (subscriptionId == null) {
+      Toast.makeText(this, "No subscription ID found.", Toast.LENGTH_SHORT).show()
+      finish()
+      return
+    }
+
+    PayPalApiClient.checkSubscriptionStatus(subscriptionId!!) { status ->
+      when (status) {
+        "ACTIVE" -> handleSubscriptionSuccess()
+        "APPROVAL_PENDING" -> Toast.makeText(this, "Subscription still pending approval.", Toast.LENGTH_SHORT).show()
+        "CANCELLED", "SUSPENDED" -> handleSubscriptionCancel()
+        else -> handleSubscriptionError()
       }
     }
   }
