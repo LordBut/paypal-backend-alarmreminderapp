@@ -1,5 +1,6 @@
 package com.alarmreminderapp.backend
 
 data class SubscriptionResponse(
-    val approvalUrl: String
+  val subscriptionId: String,
+  val approvalUrl: String?
 )

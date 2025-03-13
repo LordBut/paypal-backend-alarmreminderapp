@@ -12,9 +12,9 @@ import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.lifecycle.Observer
+import androidx.lifecycle.lifecycleScope
 import com.alarmreminderapp.R
-import com.alarmreminderapp.backend.SubscriptionResponse
-import com.alarmreminderapp.backend.PayPalApiClient // Ensure you have an API client to fetch subscription status
+import kotlinx.coroutines.launch
 
 class PayPalSubscriptionActivity : AppCompatActivity() {
 
@@ -46,7 +46,7 @@ class PayPalSubscriptionActivity : AppCompatActivity() {
     val tierName = intent.getStringExtra(EXTRA_TIER_NAME)
 
     if (planId != null && tierName != null) {
-      viewModel.startSubscription(planId)
+      viewModel.startSubscription(planId, tierName)
 
       // Observe LiveData from ViewModel
       viewModel.subscriptionResponse.observe(this, Observer { response ->
@@ -59,7 +59,7 @@ class PayPalSubscriptionActivity : AppCompatActivity() {
   }
 
   private fun handleSubscriptionResponse(response: SubscriptionResponse?) {
-    if (response?.approvalUrl != null && response.subscriptionId != null) {
+    if (response?.approvalUrl != null) {
       subscriptionId = response.subscriptionId // Store Subscription ID
 
       // Open the approval URL using Chrome Custom Tabs for a smoother experience
@@ -91,12 +91,15 @@ class PayPalSubscriptionActivity : AppCompatActivity() {
       return
     }
 
-    PayPalApiClient.checkSubscriptionStatus(subscriptionId!!) { status ->
-      when (status) {
-        "ACTIVE" -> handleSubscriptionSuccess()
-        "APPROVAL_PENDING" -> Toast.makeText(this, "Subscription still pending approval.", Toast.LENGTH_SHORT).show()
-        "CANCELLED", "SUSPENDED" -> handleSubscriptionCancel()
-        else -> handleSubscriptionError()
+    // Use a coroutine to call the suspend function
+    lifecycleScope.launch {
+      val isActive = PayPalApiClient().CheckSubscriptionStatus(subscriptionId!!)
+      Log.d("PayPalSubscription", "Subscription check result: $isActive")
+
+      if (isActive) {
+        handleSubscriptionSuccess()
+      } else {
+        handleSubscriptionCancel()
       }
     }
   }
