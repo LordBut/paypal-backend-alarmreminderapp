@@ -9,6 +9,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -36,7 +37,7 @@ class PayPalApiClient {
         val credentials = Credentials.basic(CLIENT_ID, CLIENT_SECRET)
         val request = Request.Builder()
           .url("$PAYPAL_BASE_URL/v1/oauth2/token")
-          .post(RequestBody.create("application/x-www-form-urlencoded".toMediaTypeOrNull(), "grant_type=client_credentials"))
+          .post("grant_type=client_credentials".toRequestBody("application/x-www-form-urlencoded".toMediaTypeOrNull()))
           .header("Authorization", credentials)
           .header("Accept", "application/json")
           .header("Content-Type", "application/x-www-form-urlencoded")
@@ -82,7 +83,7 @@ class PayPalApiClient {
 
         val request = Request.Builder()
           .url("$PAYPAL_BASE_URL/v1/billing/subscriptions")
-          .post(RequestBody.create("application/json".toMediaTypeOrNull(), requestBody.toString()))
+          .post(requestBody.toString().toRequestBody("application/json".toMediaTypeOrNull()))
           .header("Authorization", "Bearer $accessToken")
           .header("Content-Type", "application/json")
           .build()
