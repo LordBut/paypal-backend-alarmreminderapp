@@ -4,11 +4,9 @@ import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.Credentials
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -16,9 +14,9 @@ import java.util.concurrent.TimeUnit
 class PayPalApiClient {
 
   companion object {
-    private const val PAYPAL_BASE_URL = "https://api-m.sandbox.paypal.com" // Use live URL in production
-    private const val CLIENT_ID = "YOUR_PAYPAL_CLIENT_ID"
-    private const val CLIENT_SECRET = "YOUR_PAYPAL_CLIENT_SECRET"
+    private const val PAYPAL_BASE_URL = "https://api-m.sandbox.paypal.com"
+    private const val CLIENT_ID = "AeLm8ttAP24tLByr4oq9KdAxt6HVKbPgz1p0_FmKHTEq7DrPMaXpc9HLs1m5-A_S-NN0xxCHRt2IkMc7"
+    private const val CLIENT_SECRET = "EI3vEY29BLFvu257va0RVm5U-ced2BpPFAr0UvQswqwmAQunqeVSy5yysOikHea4IFr_x7-ybJiFnave"
     private const val TAG = "PayPalApiClient"
   }
 
@@ -28,46 +26,50 @@ class PayPalApiClient {
     .writeTimeout(30, TimeUnit.SECONDS)
     .build()
 
-  /**
-   * Retrieves an OAuth access token from PayPal.
-   */
   private suspend fun getAccessToken(): String? {
     return withContext(Dispatchers.IO) {
       try {
-        val credentials = Credentials.basic(CLIENT_ID, CLIENT_SECRET)
+        val credentials = android.util.Base64.encodeToString(
+          "$CLIENT_ID:$CLIENT_SECRET".toByteArray(),
+          android.util.Base64.NO_WRAP
+        )
+        val requestBody = "grant_type=client_credentials"
+          .toRequestBody("application/x-www-form-urlencoded".toMediaTypeOrNull())
+
         val request = Request.Builder()
           .url("$PAYPAL_BASE_URL/v1/oauth2/token")
-          .post("grant_type=client_credentials".toRequestBody("application/x-www-form-urlencoded".toMediaTypeOrNull()))
-          .header("Authorization", credentials)
+          .post(requestBody)
+          .header("Authorization", "Basic $credentials")
           .header("Accept", "application/json")
           .header("Content-Type", "application/x-www-form-urlencoded")
           .build()
 
         val response = client.newCall(request).execute()
+        val responseBody = response.body?.string() ?: ""
+
         if (response.isSuccessful) {
-          val jsonResponse = JSONObject(response.body?.string() ?: "")
+          val jsonResponse = JSONObject(responseBody)
           return@withContext jsonResponse.getString("access_token")
         } else {
-          Log.e(TAG, "Error getting PayPal token: ${response.message}")
+          Log.e(TAG, "Token Error ${response.code}: $responseBody")
           return@withContext null
         }
       } catch (e: Exception) {
-        Log.e(TAG, "Exception getting PayPal token: ${e.message}")
+        Log.e(TAG, "Token Exception: ${e.message}")
         return@withContext null
       }
     }
   }
 
-  /**
-   * Creates a PayPal subscription and returns the approval URL.
-   */
   suspend fun createSubscription(planId: String, tier: String): SubscriptionResponse? {
     return withContext(Dispatchers.IO) {
       val accessToken = getAccessToken() ?: return@withContext null
+      val userId = FirebaseAuth.getInstance().currentUser?.uid ?: return@withContext null
 
       try {
         val requestBody = JSONObject().apply {
           put("plan_id", planId)
+          put("custom_id", userId)
           put("subscriber", JSONObject().apply {
             put("email_address", FirebaseAuth.getInstance().currentUser?.email ?: "unknown@example.com")
           })
@@ -76,8 +78,10 @@ class PayPalApiClient {
             put("locale", "en-US")
             put("shipping_preference", "NO_SHIPPING")
             put("user_action", "SUBSCRIBE_NOW")
-            put("return_url", "alarmreminderapp://subscription/success")
-            put("cancel_url", "alarmreminderapp://subscription/cancel")
+
+            // ⬇️ Updated to go through your Render backend
+            put("return_url", "https://paypal-api-khmg.onrender.com/paypal/subscription/success?tier=$tier")
+            put("cancel_url", "https://paypal-api-khmg.onrender.com/paypal/subscription/cancel")
           })
         }
 
@@ -89,8 +93,10 @@ class PayPalApiClient {
           .build()
 
         val response = client.newCall(request).execute()
+        val responseBody = response.body?.string() ?: ""
+
         if (response.isSuccessful) {
-          val jsonResponse = JSONObject(response.body?.string() ?: "")
+          val jsonResponse = JSONObject(responseBody)
           val approvalUrl = jsonResponse.getJSONArray("links")
             .let { links ->
               (0 until links.length())
@@ -104,19 +110,16 @@ class PayPalApiClient {
             approvalUrl = approvalUrl
           )
         } else {
-          Log.e(TAG, "Error creating subscription: ${response.message}")
+          Log.e(TAG, "Create Subscription Error ${response.code}: $responseBody")
           return@withContext null
         }
       } catch (e: Exception) {
-        Log.e(TAG, "Exception creating subscription: ${e.message}")
+        Log.e(TAG, "Create Subscription Exception: ${e.message}")
         return@withContext null
       }
     }
   }
 
-  /**
-   * Gets the status of a PayPal subscription.
-   */
   suspend fun getSubscriptionStatus(subscriptionId: String): String? {
     return withContext(Dispatchers.IO) {
       val accessToken = getAccessToken() ?: return@withContext null
@@ -134,11 +137,11 @@ class PayPalApiClient {
           val jsonResponse = JSONObject(response.body?.string() ?: "")
           return@withContext jsonResponse.getString("status")
         } else {
-          Log.e(TAG, "Error fetching subscription status: ${response.message}")
+          Log.e(TAG, "Get Status Error: ${response.message}")
           return@withContext null
         }
       } catch (e: Exception) {
-        Log.e(TAG, "Exception fetching subscription status: ${e.message}")
+        Log.e(TAG, "Get Status Exception: ${e.message}")
         return@withContext null
       }
     }
@@ -147,11 +150,34 @@ class PayPalApiClient {
   suspend fun CheckSubscriptionStatus(subscriptionId: String): Boolean {
     return withContext(Dispatchers.IO) {
       val status = getSubscriptionStatus(subscriptionId)
-      Log.d(TAG, "Subscription status: $status")
+      return@withContext status == "ACTIVE"
+    }
+  }
 
-      return@withContext status == "ACTIVE" // Returns true if the subscription is active
+   suspend fun cancelSubscription(subscriptionId: String): Boolean {
+    return withContext(Dispatchers.IO) {
+      val accessToken = getAccessToken() ?: return@withContext false
+
+      try {
+        val request = Request.Builder()
+          .url("$PAYPAL_BASE_URL/v1/billing/subscriptions/$subscriptionId/cancel")
+          .post("".toRequestBody("application/json".toMediaTypeOrNull()))
+          .header("Authorization", "Bearer $accessToken")
+          .header("Content-Type", "application/json")
+          .build()
+
+        val response = client.newCall(request).execute()
+        if (response.isSuccessful) {
+          Log.d(TAG, "✅ Subscription $subscriptionId cancelled successfully.")
+          return@withContext true
+        } else {
+          Log.e(TAG, "❌ Failed to cancel subscription $subscriptionId: ${response.message}")
+          return@withContext false
+        }
+      } catch (e: Exception) {
+        Log.e(TAG, "❌ Exception cancelling subscription: ${e.message}")
+        return@withContext false
+      }
     }
   }
 }
-
-
