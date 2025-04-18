@@ -4,11 +4,14 @@ const axios = require("axios");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const path = require("path");
 require("dotenv").config(); // Load environment variables early
 
-// 🔐 Firebase Admin Initialization
-const serviceAccount = require(process.env.FIREBASE_ADMIN_SDK_PATH || path.resolve(__dirname, "./alarmreminderapp-firebase-adminsdk.json"));
+// 🔐 Firebase Admin Initialization using ENV JSON
+if (!process.env.FIREBASE_ADMIN_SDK_JSON) {
+  throw new Error("Missing FIREBASE_ADMIN_SDK_JSON in environment variables.");
+}
+
+const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_SDK_JSON);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
