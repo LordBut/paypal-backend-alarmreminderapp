@@ -5,8 +5,9 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const admin = require("firebase-admin");
 const path = require("path");
-require("dotenv").config();
-
+if (process.env.NODE_ENV !== "production") {
+  require("dotenv").config();
+}
 // 🔐 Firebase Admin Initialization
 const {
   FIREBASE_PROJECT_ID,
