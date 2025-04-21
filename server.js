@@ -4,9 +4,10 @@ const axios = require("axios");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const admin = require("firebase-admin");
-require("dotenv").config(); // Load environment variables early
+const path = require("path");
+require("dotenv").config();
 
-// 🔐 Firebase Admin Initialization using individual ENV variables
+// 🔐 Firebase Admin Initialization
 const {
   FIREBASE_PROJECT_ID,
   FIREBASE_CLIENT_EMAIL,
@@ -36,6 +37,18 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
+// ✅ Serve assetlinks.json from .well-known
+app.use("/.well-known", express.static(path.join(__dirname, "public", ".well-known")));
+
+// ✅ Routes to respond to deep link paths
+app.get("/subscription/success", (req, res) => {
+  res.send("✅ Subscription success callback received.");
+});
+
+app.get("/subscription/cancel", (req, res) => {
+  res.send("❌ Subscription cancelled.");
+});
+
 // 🔹 Get PayPal Access Token
 async function getPayPalAccessToken() {
   const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString("base64");
@@ -62,8 +75,8 @@ async function getPayPalAccessToken() {
 async function createPayPalSubscription(planId, userId, tier) {
   const accessToken = await getPayPalAccessToken();
 
-  const returnUrl = `alarmreminderapp://subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${planId}`;
-  const cancelUrl = `alarmreminderapp://subscription/cancel`;
+  const returnUrl = `https://paypal-api-khmg.onrender.com/subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${planId}`;
+  const cancelUrl = `https://paypal-api-khmg.onrender.com/subscription/cancel`;
 
   try {
     const response = await axios.post(
