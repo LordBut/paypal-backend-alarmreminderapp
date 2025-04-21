@@ -4,41 +4,50 @@ const axios = require("axios");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const admin = require("firebase-admin");
-require("dotenv").config(); // Load environment variables early
+const path = require("path");
+require("dotenv").config();
 
-// 🔐 Firebase Admin Initialization using ENV JSON
-if (!process.env.FIREBASE_ADMIN_SDK_JSON) {
-  throw new Error("Missing FIREBASE_ADMIN_SDK_JSON in environment variables.");
+// 🔐 Firebase Admin Initialization
+const {
+  FIREBASE_PROJECT_ID,
+  FIREBASE_CLIENT_EMAIL,
+  FIREBASE_PRIVATE_KEY,
+  PAYPAL_CLIENT_ID,
+  PAYPAL_SECRET,
+  PAYPAL_API = "https://api-m.sandbox.paypal.com",
+  PORT = 3000,
+} = process.env;
+
+if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
+  throw new Error("❌ Missing Firebase Admin SDK environment variables.");
 }
-
-const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_SDK_JSON);
 
 admin.initializeApp({
   credential: admin.credential.cert({
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    projectId: FIREBASE_PROJECT_ID,
+    clientEmail: FIREBASE_CLIENT_EMAIL,
+    privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
   }),
 });
 
 // 📌 Initialize Express
 const app = express();
-const PORT = process.env.PORT || 3000;
 
 // 📌 Middleware
 app.use(cors());
 app.use(bodyParser.json());
 
-// 📌 Load PayPal credentials from .env
-const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
-const PAYPAL_SECRET = process.env.PAYPAL_SECRET;
-const PAYPAL_API = process.env.PAYPAL_API || "https://api-m.sandbox.paypal.com";
+// ✅ Serve assetlinks.json from .well-known
+app.use("/.well-known", express.static(path.join(__dirname, "public", ".well-known")));
 
-// 🧪 Debug log (for testing only, remove in production)
-console.log("🟡 Loaded PayPal Credentials");
-console.log("PAYPAL_CLIENT_ID:", PAYPAL_CLIENT_ID ? "[OK]" : "[MISSING]");
-console.log("PAYPAL_SECRET:", PAYPAL_SECRET ? "[OK]" : "[MISSING]");
-console.log("PAYPAL_API:", PAYPAL_API);
+// ✅ Routes to respond to deep link paths
+app.get("/subscription/success", (req, res) => {
+  res.send("✅ Subscription success callback received.");
+});
+
+app.get("/subscription/cancel", (req, res) => {
+  res.send("❌ Subscription cancelled.");
+});
 
 // 🔹 Get PayPal Access Token
 async function getPayPalAccessToken() {
@@ -55,7 +64,6 @@ async function getPayPalAccessToken() {
         },
       }
     );
-
     return response.data.access_token;
   } catch (error) {
     console.error("❌ Failed to get PayPal token:", error.response?.data || error.message);
@@ -67,8 +75,8 @@ async function getPayPalAccessToken() {
 async function createPayPalSubscription(planId, userId, tier) {
   const accessToken = await getPayPalAccessToken();
 
-  const returnUrl = `alarmreminderapp://subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${planId}`;
-  const cancelUrl = `alarmreminderapp://subscription/cancel`;
+  const returnUrl = `https://paypal-api-khmg.onrender.com/subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${planId}`;
+  const cancelUrl = `https://paypal-api-khmg.onrender.com/subscription/cancel`;
 
   try {
     const response = await axios.post(
@@ -108,7 +116,6 @@ app.get("/", (req, res) => {
 app.post("/create-subscription", async (req, res) => {
   try {
     const { planId, userId, tier } = req.body;
-
     if (!planId || !userId || !tier) {
       return res.status(400).json({ error: "Missing planId, userId, or tier." });
     }
@@ -127,9 +134,7 @@ app.post("/paypal/webhook", async (req, res) => {
 
   try {
     if (event.event_type === "BILLING.SUBSCRIPTION.ACTIVATED") {
-      const subscriptionId = event.resource.id;
-      const planId = event.resource.plan_id;
-      const userId = event.resource.custom_id;
+      const { id: subscriptionId, plan_id: planId, custom_id: userId } = event.resource;
 
       if (userId) {
         await admin.firestore().collection("users").doc(userId).set({

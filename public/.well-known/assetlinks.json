@@ -1,0 +1,13 @@
+[
+    {
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "com.alarmreminderapp",
+        "sha256_cert_fingerprints": [
+          "CE:E3:DC:E6:45:1A:BE:C3:6F:2A:0C:D8:6C:A0:63:E2:E0:12:4F:3D:CE:47:F6:09:ED:3A:BB:00:AB:79:80:0C"
+        ]
+      }
+    }
+  ]
+  
