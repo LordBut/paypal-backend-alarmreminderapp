@@ -5,9 +5,12 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const admin = require("firebase-admin");
 const path = require("path");
+
+// Load environment variables in non-production environments
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config();
 }
+
 // 🔐 Firebase Admin Initialization
 const {
   FIREBASE_PROJECT_ID,
@@ -50,6 +53,11 @@ app.get("/subscription/cancel", (req, res) => {
   res.send("❌ Subscription cancelled.");
 });
 
+// ✅ New route to handle PayPal return URL
+app.get("/paypal/subscription/success", (req, res) => {
+  res.send("✅ PayPal subscription successful. Thank you for subscribing.");
+});
+
 // 🔹 Get PayPal Access Token
 async function getPayPalAccessToken() {
   const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString("base64");
@@ -76,7 +84,7 @@ async function getPayPalAccessToken() {
 async function createPayPalSubscription(planId, userId, tier) {
   const accessToken = await getPayPalAccessToken();
 
-  const returnUrl = `https://paypal-api-khmg.onrender.com/subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${planId}`;
+  const returnUrl = `https://paypal-api-khmg.onrender.com/paypal/subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${planId}`;
   const cancelUrl = `https://paypal-api-khmg.onrender.com/subscription/cancel`;
 
   try {
