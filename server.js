@@ -6,7 +6,6 @@ const cors = require("cors");
 const admin = require("firebase-admin");
 const path = require("path");
 
-// Load environment variables in non-production environments
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config();
 }
@@ -36,32 +35,28 @@ admin.initializeApp({
 
 // 📌 Initialize Express
 const app = express();
-
-// 📌 Middleware
 app.use(cors());
 app.use(bodyParser.json());
 
-// ✅ Serve assetlinks.json from .well-known
+// ✅ Serve assetlinks.json
 app.use("/.well-known", express.static(path.join(__dirname, "public", ".well-known")));
 
-// ✅ Routes to respond to deep link paths
+// ✅ Deep Link Redirection Routes
 app.get("/subscription/success", (req, res) => {
-  res.send("✅ Subscription success callback received.");
+  const { tier, plan_id } = req.query;
+  const redirectUrl = `alarmreminderapp://subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(plan_id)}`;
+  console.log(`➡️ Redirecting to app: ${redirectUrl}`);
+  res.redirect(302, redirectUrl);
 });
 
 app.get("/subscription/cancel", (req, res) => {
-  res.send("❌ Subscription cancelled.");
-});
-
-// ✅ New route to handle PayPal return URL
-app.get("/paypal/subscription/success", (req, res) => {
-  res.send("✅ PayPal subscription successful. Thank you for subscribing.");
+  console.log(`➡️ Redirecting to cancel deep link.`);
+  res.redirect(302, "alarmreminderapp://subscription/cancel");
 });
 
 // 🔹 Get PayPal Access Token
 async function getPayPalAccessToken() {
   const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString("base64");
-
   try {
     const response = await axios.post(
       `${PAYPAL_API}/v1/oauth2/token`,
@@ -83,10 +78,8 @@ async function getPayPalAccessToken() {
 // 🔹 Create PayPal Subscription
 async function createPayPalSubscription(planId, userId, tier) {
   const accessToken = await getPayPalAccessToken();
-
-  const returnUrl = `alarmreminderapp://subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${planId}`;
-  const cancelUrl = `alarmreminderapp://subscription/cancel`;
-
+  const returnUrl = `https://paypal-api-khmg.onrender.com/subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(planId)}`;
+  const cancelUrl = `https://paypal-api-khmg.onrender.com/subscription/cancel`;
 
   try {
     const response = await axios.post(
@@ -108,7 +101,6 @@ async function createPayPalSubscription(planId, userId, tier) {
         },
       }
     );
-
     const approvalUrl = response.data.links.find(link => link.rel === "approve")?.href;
     return approvalUrl;
   } catch (error) {
@@ -117,19 +109,17 @@ async function createPayPalSubscription(planId, userId, tier) {
   }
 }
 
-// ✅ Default route
+// ✅ Routes
 app.get("/", (req, res) => {
   res.send("🚀 Server is running. PayPal API ready.");
 });
 
-// ✅ Create Subscription Route
 app.post("/create-subscription", async (req, res) => {
   try {
     const { planId, userId, tier } = req.body;
     if (!planId || !userId || !tier) {
       return res.status(400).json({ error: "Missing planId, userId, or tier." });
     }
-
     const approvalUrl = await createPayPalSubscription(planId, userId, tier);
     res.json({ approvalUrl });
   } catch (error) {
@@ -137,7 +127,6 @@ app.post("/create-subscription", async (req, res) => {
   }
 });
 
-// ✅ PayPal Webhook Handler
 app.post("/paypal/webhook", async (req, res) => {
   const event = req.body;
   console.log("📬 Webhook Event:", event.event_type);
@@ -153,11 +142,9 @@ app.post("/paypal/webhook", async (req, res) => {
           subscriptionStatus: "active",
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
-
         console.log(`✅ Subscription stored for user: ${userId}`);
       }
     }
-
     res.sendStatus(200);
   } catch (err) {
     console.error("❌ Webhook Error:", err.message);
@@ -167,5 +154,5 @@ app.post("/paypal/webhook", async (req, res) => {
 
 // ✅ Start Express Server
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
