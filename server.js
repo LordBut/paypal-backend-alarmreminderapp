@@ -84,8 +84,9 @@ async function getPayPalAccessToken() {
 async function createPayPalSubscription(planId, userId, tier) {
   const accessToken = await getPayPalAccessToken();
 
-  const returnUrl = `alarmreminderapp://subscription/success?tier=${encodeURIComponent(tier)}&subscription_id=${subscriptionId}`;
-  const cancelUrl = `https://paypal-api-khmg.onrender.com/subscription/cancel`;
+  const returnUrl = `alarmreminderapp://subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${planId}`;
+  const cancelUrl = `alarmreminderapp://subscription/cancel`;
+
 
   try {
     const response = await axios.post(
