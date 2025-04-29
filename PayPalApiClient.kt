@@ -75,13 +75,14 @@ class PayPalApiClient {
             put("email_address", user.email ?: "unknown@example.com")
           })
           put("application_context", JSONObject().apply {
-            put("brand_name", "Alarm Reminder App")
-            put("locale", "en-US")
-            put("shipping_preference", "NO_SHIPPING")
-            put("user_action", "SUBSCRIBE_NOW")
-            put("return_url", "alarmreminderapp://subscription/success?tier=$tier")
-            put("cancel_url", "alarmreminderapp://subscription/cancel")
-          })
+    put("brand_name", "Alarm Reminder App")
+    put("locale", "en-US")
+    put("shipping_preference", "NO_SHIPPING")
+    put("user_action", "SUBSCRIBE_NOW")
+    put("return_url", "https://paypal-api-khmg.onrender.com/subscription/success?tier=$tier&plan_id=$planId")
+    put("cancel_url", "https://paypal-api-khmg.onrender.com/subscription/cancel")
+})
+
         }
 
         val request = Request.Builder()
