@@ -164,3 +164,14 @@ app.post("/paypal/webhook", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
+
+// ✅ Route to Retrieve PayPal Access Token
+app.get("/api/paypal/token", async (req, res) => {
+  try {
+    const accessToken = await getPayPalAccessToken();
+    res.json({ access_token: accessToken });
+  } catch (error) {
+    console.error("❌ Failed to retrieve PayPal token:", error.message);
+    res.status(500).json({ error: "Failed to retrieve PayPal token" });
+  }
+});
