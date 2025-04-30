@@ -41,13 +41,23 @@ app.use(bodyParser.json());
 // ✅ Serve assetlinks.json
 app.use("/.well-known", express.static(path.join(__dirname, "public", ".well-known")));
 
-// ✅ Deep Link Redirection Routes
+// Legacy deep link route (currently used in your app)
 app.get("/subscription/success", (req, res) => {
   const { tier, plan_id } = req.query;
   const redirectUrl = `alarmreminderapp://subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(plan_id)}`;
-  console.log(`➡️ Redirecting to app: ${redirectUrl}`);
+  console.log(`➡️ Redirecting to app (legacy): ${redirectUrl}`);
   res.redirect(302, redirectUrl);
 });
+
+// NEW: PayPal return_url handler
+app.get("/paypal/subscription/success", (req, res) => {
+  const { subscription_id, token, tier, plan_id } = req.query;
+  const redirectUrl = `alarmreminderapp://subscription/success?subscription_id=${encodeURIComponent(subscription_id || '')}&tier=${encodeURIComponent(tier || '')}&plan_id=${encodeURIComponent(plan_id || '')}`;
+  console.log(`➡️ Redirecting to app (PayPal): ${redirectUrl}`);
+  res.redirect(302, redirectUrl);
+});
+
+
 
 app.get("/subscription/cancel", (req, res) => {
   console.log(`➡️ Redirecting to cancel deep link.`);
