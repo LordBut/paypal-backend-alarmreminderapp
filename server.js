@@ -76,7 +76,7 @@ async function getPayPalAccessToken() {
 }
 
 // 🔹 Create PayPal Subscription
-async function createPayPalSubscription(planId, userId, tier) {
+async function createPayPalSubscription(planId, userId, tier, userEmail) {
   const accessToken = await getPayPalAccessToken();
   const returnUrl = `https://paypal-api-khmg.onrender.com/subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(planId)}`;
   const cancelUrl = `https://paypal-api-khmg.onrender.com/subscription/cancel`;
@@ -87,8 +87,13 @@ async function createPayPalSubscription(planId, userId, tier) {
       {
         plan_id: planId,
         custom_id: userId,
+        subscriber: {
+          email_address: userEmail || "unknown@example.com",
+        },
         application_context: {
           brand_name: "Alarm Reminder App",
+          locale: "en-US",
+          shipping_preference: "NO_SHIPPING",
           user_action: "SUBSCRIBE_NOW",
           return_url: returnUrl,
           cancel_url: cancelUrl,
@@ -102,7 +107,10 @@ async function createPayPalSubscription(planId, userId, tier) {
       }
     );
     const approvalUrl = response.data.links.find(link => link.rel === "approve")?.href;
-    return approvalUrl;
+    return {
+      subscriptionId: response.data.id,
+      approvalUrl,
+    };
   } catch (error) {
     console.error("❌ Failed to create PayPal subscription:", error.response?.data || error.message);
     throw new Error("Failed to create subscription");
@@ -116,12 +124,12 @@ app.get("/", (req, res) => {
 
 app.post("/create-subscription", async (req, res) => {
   try {
-    const { planId, userId, tier } = req.body;
+    const { planId, userId, tier, userEmail } = req.body;
     if (!planId || !userId || !tier) {
       return res.status(400).json({ error: "Missing planId, userId, or tier." });
     }
-    const approvalUrl = await createPayPalSubscription(planId, userId, tier);
-    res.json({ approvalUrl });
+    const { subscriptionId, approvalUrl } = await createPayPalSubscription(planId, userId, tier, userEmail);
+    res.json({ subscriptionId, approvalUrl });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
