@@ -160,4 +160,11 @@ class PayPalApiClient {
       }
     }
   }
+
+  suspend fun checkSubscriptionStatus(subscriptionId: String): Boolean {
+    return withContext(Dispatchers.IO) {
+      getSubscriptionStatus(subscriptionId) == "ACTIVE"
+    }
+  }
 }
+
