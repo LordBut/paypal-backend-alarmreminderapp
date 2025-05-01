@@ -161,10 +161,42 @@ class PayPalApiClient {
     }
   }
 
-  suspend fun checkSubscriptionStatus(subscriptionId: String): Boolean {
+  suspend fun notifySubscriptionSuccess(subscriptionId: String, planId: String, tier: String): Boolean {
+    return withContext(Dispatchers.IO) {
+      val accessToken = getAccessToken() ?: return@withContext false
+
+      try {
+        val json = JSONObject().apply {
+          put("subscriptionId", subscriptionId)
+          put("planId", planId)
+          put("tier", tier)
+        }
+
+        val request = Request.Builder()
+          .url("$BACKEND_BASE_URL/subscription/$subscriptionId/success")
+          .post(json.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+          .header("Authorization", "Bearer $accessToken")
+          .header("Content-Type", "application/json")
+          .build()
+
+        val response = client.newCall(request).execute()
+        if (response.isSuccessful) {
+          Log.d(TAG, "✅ Subscription $subscriptionId success notified.")
+          true
+        } else {
+          Log.e(TAG, "❌ Failed to notify success: ${response.message}")
+          false
+        }
+      } catch (e: Exception) {
+        Log.e(TAG, "❌ Exception notifying success: ${e.message}")
+        false
+      }
+    }
+  }
+
+  suspend fun CheckSubscriptionStatus(subscriptionId: String): Boolean {
     return withContext(Dispatchers.IO) {
       getSubscriptionStatus(subscriptionId) == "ACTIVE"
     }
   }
 }
-
