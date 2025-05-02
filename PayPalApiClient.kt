@@ -1,5 +1,6 @@
 package com.alarmreminderapp.backend
 
+import android.net.Uri
 import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Dispatchers
@@ -67,13 +68,14 @@ class PayPalApiClient {
             put("locale", "en-US")
             put("shipping_preference", "NO_SHIPPING")
             put("user_action", "SUBSCRIBE_NOW")
+            // Temporary placeholder, will update after extracting token
             put("return_url", "https://paypal-api-khmg.onrender.com/paypal/subscription/success?tier=$tier&plan_id=$planId")
             put("cancel_url", "https://paypal-api-khmg.onrender.com/subscription/cancel")
           })
         }
 
         val request = Request.Builder()
-          .url("$BACKEND_BASE_URL/subscription")
+          .url("https://api-m.sandbox.paypal.com/v1/billing/subscriptions")
           .post(requestBody.toString().toRequestBody("application/json".toMediaTypeOrNull()))
           .header("Authorization", "Bearer $accessToken")
           .header("Content-Type", "application/json")
@@ -92,8 +94,10 @@ class PayPalApiClient {
                 ?.getString("href")
             }
 
-          SubscriptionResponse(
-            subscriptionId = jsonResponse.getString("id"),
+          val token = Uri.parse(approvalUrl).getQueryParameter("token") ?: ""
+
+          return@withContext SubscriptionResponse(
+            subscriptionId = token,
             approvalUrl = approvalUrl
           )
         } else {
