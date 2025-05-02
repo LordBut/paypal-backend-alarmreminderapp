@@ -67,7 +67,7 @@ class PayPalApiClient {
             put("locale", "en-US")
             put("shipping_preference", "NO_SHIPPING")
             put("user_action", "SUBSCRIBE_NOW")
-            put("return_url", "https://paypal-api-khmg.onrender.com/subscription/success?tier=$tier&plan_id=$planId")
+            put("return_url", "https://paypal-api-khmg.onrender.com/paypal/subscription/success?tier=$tier&plan_id=$planId")
             put("cancel_url", "https://paypal-api-khmg.onrender.com/subscription/cancel")
           })
         }
