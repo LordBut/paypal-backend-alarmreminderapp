@@ -58,27 +58,15 @@ class PayPalApiClient {
 
       try {
         val requestBody = JSONObject().apply {
-          put("plan_id", planId)
-          put("custom_id", userId)
-          put("subscriber", JSONObject().apply {
-            put("email_address", user.email ?: "unknown@example.com")
-          })
-          put("application_context", JSONObject().apply {
-            put("brand_name", "Alarm Reminder App")
-            put("locale", "en-US")
-            put("shipping_preference", "NO_SHIPPING")
-            put("user_action", "SUBSCRIBE_NOW")
-            // Temporary placeholder, will update after extracting token
-            put("return_url", "https://paypal-api-khmg.onrender.com/paypal/subscription/success?tier=$tier&plan_id=$planId")
-            put("cancel_url", "https://paypal-api-khmg.onrender.com/subscription/cancel")
-          })
+          put("planId", planId)
+          put("userId", userId)
+          put("tier", tier)
+          put("userEmail", user.email ?: "unknown@example.com")
         }
 
         val request = Request.Builder()
-          .url("https://api-m.sandbox.paypal.com/v1/billing/subscriptions")
+          .url("$BACKEND_BASE_URL/create-subscription")
           .post(requestBody.toString().toRequestBody("application/json".toMediaTypeOrNull()))
-          .header("Authorization", "Bearer $accessToken")
-          .header("Content-Type", "application/json")
           .build()
 
         val response = client.newCall(request).execute()
@@ -86,19 +74,9 @@ class PayPalApiClient {
 
         if (response.isSuccessful) {
           val jsonResponse = JSONObject(responseBody)
-          val approvalUrl = jsonResponse.getJSONArray("links")
-            .let { links ->
-              (0 until links.length())
-                .map { links.getJSONObject(it) }
-                .firstOrNull { it.getString("rel") == "approve" }
-                ?.getString("href")
-            }
-
-          val token = Uri.parse(approvalUrl).getQueryParameter("token") ?: ""
-
           return@withContext SubscriptionResponse(
-            subscriptionId = token,
-            approvalUrl = approvalUrl
+            subscriptionId = jsonResponse.getString("subscriptionId"),
+            approvalUrl = jsonResponse.getString("approvalUrl")
           )
         } else {
           Log.e(TAG, "Create Subscription Error ${response.code}: $responseBody")
