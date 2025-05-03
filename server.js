@@ -41,7 +41,7 @@ app.use(bodyParser.json());
 // ✅ Serve assetlinks.json
 app.use("/.well-known", express.static(path.join(__dirname, "public", ".well-known")));
 
-// NEW: PayPal return_url handler
+// ✅ PayPal return & cancel URLs
 app.get("/paypal/subscription/success", (req, res) => {
   const { subscription_id, tier, plan_id } = req.query;
   const redirectUrl = `alarmreminderapp://subscription/success?subscription_id=${encodeURIComponent(subscription_id || '')}&tier=${encodeURIComponent(tier || '')}&plan_id=${encodeURIComponent(plan_id || '')}`;
@@ -50,11 +50,11 @@ app.get("/paypal/subscription/success", (req, res) => {
 });
 
 app.get("/subscription/cancel", (req, res) => {
-  console.log(`➡️ Redirecting to cancel deep link.`);
+  console.log("➡️ Redirecting to cancel deep link.");
   res.redirect(302, "alarmreminderapp://subscription/cancel");
 });
 
-// 🔹 Get PayPal Access Token
+// 🔹 PayPal Access Token
 async function getPayPalAccessToken() {
   const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString("base64");
   try {
@@ -137,16 +137,29 @@ app.post("/create-subscription", async (req, res) => {
 
 // 🔹 Webhook Handler
 app.post("/paypal/webhook", async (req, res) => {
-  const event = req.body;
-  console.log("📬 Webhook Event:", event.event_type);
-
   try {
+    const event = req.body;
     const { event_type, resource } = event;
-    const { id: subscriptionId, plan_id: planId, custom_id: userId } = resource;
+
+    if (!event_type || !resource) {
+      console.warn("⚠️ Incomplete webhook payload.");
+      return res.sendStatus(200);
+    }
+
+    console.log("📬 Webhook event received:", event_type);
+
+    const subscriptionId = resource.id;
+    const planId = resource.plan_id;
+    const userId = resource.custom_id;
+
+    if (!subscriptionId) {
+      console.warn("⚠️ Missing subscriptionId.");
+      return res.sendStatus(200);
+    }
 
     if (!userId) {
-      console.warn("⚠️ Missing userId in webhook event.");
-      return res.sendStatus(400);
+      console.warn(`⚠️ No userId (custom_id) for event ${event_type}, Subscription ID: ${subscriptionId}`);
+      return res.sendStatus(200);
     }
 
     const userRef = admin.firestore().collection("users").doc(userId);
@@ -187,7 +200,6 @@ app.post("/paypal/webhook", async (req, res) => {
         break;
 
       case "PAYMENT.SALE.COMPLETED":
-        // Handle recurring payment confirmation if needed
         console.log(`💰 Payment completed for subscription: ${subscriptionId}`);
         break;
 
@@ -197,12 +209,12 @@ app.post("/paypal/webhook", async (req, res) => {
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("❌ Webhook Error:", err.message);
-    res.sendStatus(500);
+    console.error("❌ Webhook Error:", err.stack || err.message);
+    res.sendStatus(200); // Prevent PayPal retries
   }
 });
 
-// ✅ Route to Retrieve PayPal Access Token
+// ✅ Retrieve PayPal Access Token
 app.get("/api/paypal/token", async (req, res) => {
   try {
     const accessToken = await getPayPalAccessToken();
