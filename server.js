@@ -43,7 +43,7 @@ app.use("/.well-known", express.static(path.join(__dirname, "public", ".well-kno
 
 // NEW: PayPal return_url handler
 app.get("/paypal/subscription/success", (req, res) => {
-  const { subscription_id, token, tier, plan_id } = req.query;
+  const { subscription_id, tier, plan_id } = req.query;
   const redirectUrl = `alarmreminderapp://subscription/success?subscription_id=${encodeURIComponent(subscription_id || '')}&tier=${encodeURIComponent(tier || '')}&plan_id=${encodeURIComponent(plan_id || '')}`;
   console.log(`➡️ Redirecting to app (PayPal): ${redirectUrl}`);
   res.redirect(302, redirectUrl);
