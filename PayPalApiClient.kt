@@ -1,15 +1,14 @@
 package com.alarmreminderapp.backend
 
-import android.net.Uri
 import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class PayPalApiClient {
@@ -17,6 +16,8 @@ class PayPalApiClient {
   companion object {
     private const val TAG = "PayPalApiClient"
     private const val BACKEND_BASE_URL = "https://paypal-api-khmg.onrender.com/api/paypal"
+    private const val CONTENT_TYPE = "application/json"
+    private const val AUTHORIZATION = "Authorization"
   }
 
   private val client = OkHttpClient.Builder()
@@ -25,24 +26,30 @@ class PayPalApiClient {
     .writeTimeout(30, TimeUnit.SECONDS)
     .build()
 
+  private var cachedAccessToken: String? = null
+
   private suspend fun getAccessToken(): String? {
-    return withContext(Dispatchers.IO) {
+    return cachedAccessToken ?: withContext(Dispatchers.IO) {
       try {
         val request = Request.Builder()
           .url("$BACKEND_BASE_URL/token")
           .get()
           .build()
 
-        val response = client.newCall(request).execute()
-        val responseBody = response.body?.string() ?: ""
-
-        if (response.isSuccessful) {
-          val jsonResponse = JSONObject(responseBody)
-          jsonResponse.getString("access_token")
-        } else {
-          Log.e(TAG, "Token Error ${response.code}: $responseBody")
-          null
+        client.newCall(request).execute().use { response ->
+          val responseBody = response.body?.string() ?: ""
+          if (response.isSuccessful) {
+            val jsonResponse = JSONObject(responseBody)
+            cachedAccessToken = jsonResponse.getString("access_token")
+            cachedAccessToken
+          } else {
+            Log.e(TAG, "Token Error ${response.code}: $responseBody")
+            null
+          }
         }
+      } catch (e: IOException) {
+        Log.e(TAG, "Token IOException: ${e.message}")
+        null
       } catch (e: Exception) {
         Log.e(TAG, "Token Exception: ${e.message}")
         null
@@ -75,39 +82,41 @@ class PayPalApiClient {
 
         val request = Request.Builder()
           .url("$BACKEND_BASE_URL/subscription")
-          .post(requestBody.toString().toRequestBody("application/json".toMediaTypeOrNull()))
-          .header("Authorization", "Bearer $accessToken")
-          .header("Content-Type", "application/json")
+          .post(requestBody.toString().toRequestBody(CONTENT_TYPE.toMediaTypeOrNull()))
+          .header(AUTHORIZATION, "Bearer $accessToken")
+          .header("Content-Type", CONTENT_TYPE)
           .build()
 
-        val response = client.newCall(request).execute()
-        val responseBody = response.body?.string() ?: ""
+        client.newCall(request).execute().use { response ->
+          val responseBody = response.body?.string() ?: ""
+          if (response.isSuccessful) {
+            val jsonResponse = JSONObject(responseBody)
+            val approvalUrl = jsonResponse.getJSONArray("links")
+              .let { links ->
+                (0 until links.length())
+                  .map { links.getJSONObject(it) }
+                  .firstOrNull { it.getString("rel") == "approve" }
+                  ?.getString("href")
+              }
 
-        if (response.isSuccessful) {
-          val jsonResponse = JSONObject(responseBody)
-          val approvalUrl = jsonResponse.getJSONArray("links")
-            .let { links ->
-              (0 until links.length())
-                .map { links.getJSONObject(it) }
-                .firstOrNull { it.getString("rel") == "approve" }
-                ?.getString("href")
-            }
-
-          SubscriptionResponse(
-            subscriptionId = jsonResponse.getString("id"),
-            approvalUrl = approvalUrl
-          )
-        } else {
-          Log.e(TAG, "Create Subscription Error ${response.code}: $responseBody")
-          null
+            SubscriptionResponse(
+              subscriptionId = jsonResponse.getString("id"),
+              approvalUrl = approvalUrl
+            )
+          } else {
+            Log.e(TAG, "Create Subscription Error ${response.code}: $responseBody")
+            null
+          }
         }
+      } catch (e: IOException) {
+        Log.e(TAG, "Create Subscription IOException: ${e.message}")
+        null
       } catch (e: Exception) {
         Log.e(TAG, "Create Subscription Exception: ${e.message}")
         null
       }
     }
   }
-
 
   suspend fun getSubscriptionStatus(subscriptionId: String): String? {
     return withContext(Dispatchers.IO) {
@@ -117,18 +126,23 @@ class PayPalApiClient {
         val request = Request.Builder()
           .url("$BACKEND_BASE_URL/subscription/$subscriptionId")
           .get()
-          .header("Authorization", "Bearer $accessToken")
-          .header("Content-Type", "application/json")
+          .header(AUTHORIZATION, "Bearer $accessToken")
+          .header("Content-Type", CONTENT_TYPE)
           .build()
 
-        val response = client.newCall(request).execute()
-        if (response.isSuccessful) {
-          val jsonResponse = JSONObject(response.body?.string() ?: "")
-          jsonResponse.getString("status")
-        } else {
-          Log.e(TAG, "Get Status Error: ${response.message}")
-          null
+        client.newCall(request).execute().use { response ->
+          val responseBody = response.body?.string() ?: ""
+          if (response.isSuccessful) {
+            val jsonResponse = JSONObject(responseBody)
+            jsonResponse.getString("status")
+          } else {
+            Log.e(TAG, "Get Status Error ${response.code}: $responseBody")
+            null
+          }
         }
+      } catch (e: IOException) {
+        Log.e(TAG, "Get Status IOException: ${e.message}")
+        null
       } catch (e: Exception) {
         Log.e(TAG, "Get Status Exception: ${e.message}")
         null
@@ -143,21 +157,26 @@ class PayPalApiClient {
       try {
         val request = Request.Builder()
           .url("$BACKEND_BASE_URL/subscription/$subscriptionId/cancel")
-          .post("".toRequestBody("application/json".toMediaTypeOrNull()))
-          .header("Authorization", "Bearer $accessToken")
-          .header("Content-Type", "application/json")
+          .post("".toRequestBody(CONTENT_TYPE.toMediaTypeOrNull()))
+          .header(AUTHORIZATION, "Bearer $accessToken")
+          .header("Content-Type", CONTENT_TYPE)
           .build()
 
-        val response = client.newCall(request).execute()
-        if (response.isSuccessful) {
-          Log.d(TAG, "✅ Subscription $subscriptionId cancelled successfully.")
-          true
-        } else {
-          Log.e(TAG, "❌ Failed to cancel subscription $subscriptionId: ${response.message}")
-          false
+        client.newCall(request).execute().use { response ->
+          if (response.isSuccessful) {
+            Log.d(TAG, "✅ Subscription $subscriptionId cancelled successfully.")
+            true
+          } else {
+            val responseBody = response.body?.string() ?: ""
+            Log.e(TAG, "❌ Failed to cancel subscription $subscriptionId: ${response.code} - $responseBody")
+            false
+          }
         }
+      } catch (e: IOException) {
+        Log.e(TAG, "❌ Cancel Subscription IOException: ${e.message}")
+        false
       } catch (e: Exception) {
-        Log.e(TAG, "❌ Exception cancelling subscription: ${e.message}")
+        Log.e(TAG, "❌ Cancel Subscription Exception: ${e.message}")
         false
       }
     }
@@ -176,27 +195,32 @@ class PayPalApiClient {
 
         val request = Request.Builder()
           .url("$BACKEND_BASE_URL/subscription/$subscriptionId/success")
-          .post(json.toString().toRequestBody("application/json".toMediaTypeOrNull()))
-          .header("Authorization", "Bearer $accessToken")
-          .header("Content-Type", "application/json")
+          .post(json.toString().toRequestBody(CONTENT_TYPE.toMediaTypeOrNull()))
+          .header(AUTHORIZATION, "Bearer $accessToken")
+          .header("Content-Type", CONTENT_TYPE)
           .build()
 
-        val response = client.newCall(request).execute()
-        if (response.isSuccessful) {
-          Log.d(TAG, "✅ Subscription $subscriptionId success notified.")
-          true
-        } else {
-          Log.e(TAG, "❌ Failed to notify success: ${response.message}")
-          false
+        client.newCall(request).execute().use { response ->
+          if (response.isSuccessful) {
+            Log.d(TAG, "✅ Subscription $subscriptionId success notified.")
+            true
+          } else {
+            val responseBody = response.body?.string() ?: ""
+            Log.e(TAG, "❌ Failed to notify success: ${response.code} - $responseBody")
+            false
+          }
         }
+      } catch (e: IOException) {
+        Log.e(TAG, "❌ Notify Success IOException: ${e.message}")
+        false
       } catch (e: Exception) {
-        Log.e(TAG, "❌ Exception notifying success: ${e.message}")
+        Log.e(TAG, "❌ Notify Success Exception: ${e.message}")
         false
       }
     }
   }
 
-  suspend fun CheckSubscriptionStatus(subscriptionId: String): Boolean {
+  suspend fun checkSubscriptionStatus(subscriptionId: String): Boolean {
     return withContext(Dispatchers.IO) {
       getSubscriptionStatus(subscriptionId) == "ACTIVE"
     }
