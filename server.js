@@ -33,7 +33,6 @@ admin.initializeApp({
   }),
 });
 
-// 📌 Initialize Express
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
@@ -43,8 +42,8 @@ app.use("/.well-known", express.static(path.join(__dirname, "public", ".well-kno
 
 // ✅ PayPal return & cancel URLs
 app.get("/paypal/subscription/success", (req, res) => {
-  const { subscription_id, tier, plan_id } = req.query;
-  const redirectUrl = `alarmreminderapp://subscription/success?subscription_id=${encodeURIComponent(subscription_id || '')}&tier=${encodeURIComponent(tier || '')}&plan_id=${encodeURIComponent(plan_id || '')}`;
+  const { subscription_id = "", tier = "", plan_id = "" } = req.query;
+  const redirectUrl = `alarmreminderapp://subscription/success?subscription_id=${encodeURIComponent(subscription_id)}&tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(plan_id)}`;
   console.log(`➡️ Redirecting to app (PayPal): ${redirectUrl}`);
   res.redirect(302, redirectUrl);
 });
@@ -128,9 +127,10 @@ app.post("/create-subscription", async (req, res) => {
     if (!planId || !userId || !tier) {
       return res.status(400).json({ error: "Missing planId, userId, or tier." });
     }
-    const { subscriptionId, approvalUrl } = await createPayPalSubscription(planId, userId, tier, userEmail);
-    res.json({ subscriptionId, approvalUrl });
+    const result = await createPayPalSubscription(planId, userId, tier, userEmail);
+    res.json(result);
   } catch (error) {
+    console.error("❌ Error in /create-subscription:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -138,65 +138,61 @@ app.post("/create-subscription", async (req, res) => {
 // 🔹 Webhook Handler
 app.post("/paypal/webhook", async (req, res) => {
   try {
-    const event = req.body;
-    const { event_type, resource } = event;
-
-    if (!event_type || !resource) {
+    const { event_type, resource } = req.body;
+    if (!event_type || !resource || !resource.id) {
       console.warn("⚠️ Incomplete webhook payload.");
       return res.sendStatus(200);
     }
 
-    console.log("📬 Webhook event received:", event_type);
-
     const subscriptionId = resource.id;
-    const planId = resource.plan_id;
-    const userId = resource.custom_id;
+    const planId = resource.plan_id || "";
+    const userId = resource.custom_id || "";
 
-    if (!subscriptionId) {
-      console.warn("⚠️ Missing subscriptionId.");
-      return res.sendStatus(200);
-    }
+    console.log(`📬 Webhook received: ${event_type} for subscription ${subscriptionId} (User: ${userId})`);
 
-    if (!userId) {
-      console.warn(`⚠️ No userId (custom_id) for event ${event_type}, Subscription ID: ${subscriptionId}`);
-      return res.sendStatus(200);
-    }
-
-    const userRef = admin.firestore().collection("users").doc(userId);
+    const userRef = userId ? admin.firestore().collection("users").doc(userId) : null;
 
     switch (event_type) {
       case "BILLING.SUBSCRIPTION.ACTIVATED":
-        await userRef.set({
-          subscriptionId,
-          planId,
-          subscriptionStatus: "active",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-        console.log(`✅ Subscription activated for user: ${userId}`);
+        if (userRef) {
+          await userRef.set({
+            subscriptionId,
+            planId,
+            subscriptionStatus: "active",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          console.log(`✅ Subscription activated for user: ${userId}`);
+        }
         break;
 
       case "BILLING.SUBSCRIPTION.CANCELLED":
-        await userRef.set({
-          subscriptionStatus: "cancelled",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-        console.log(`🔄 Subscription cancelled for user: ${userId}`);
+        if (userRef) {
+          await userRef.set({
+            subscriptionStatus: "cancelled",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          console.log(`🔄 Subscription cancelled for user: ${userId}`);
+        }
         break;
 
       case "BILLING.SUBSCRIPTION.SUSPENDED":
-        await userRef.set({
-          subscriptionStatus: "suspended",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-        console.log(`⏸️ Subscription suspended for user: ${userId}`);
+        if (userRef) {
+          await userRef.set({
+            subscriptionStatus: "suspended",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          console.log(`⏸️ Subscription suspended for user: ${userId}`);
+        }
         break;
 
       case "BILLING.SUBSCRIPTION.EXPIRED":
-        await userRef.set({
-          subscriptionStatus: "expired",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-        console.log(`⌛ Subscription expired for user: ${userId}`);
+        if (userRef) {
+          await userRef.set({
+            subscriptionStatus: "expired",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          console.log(`⌛ Subscription expired for user: ${userId}`);
+        }
         break;
 
       case "PAYMENT.SALE.COMPLETED":
@@ -210,7 +206,7 @@ app.post("/paypal/webhook", async (req, res) => {
     res.sendStatus(200);
   } catch (err) {
     console.error("❌ Webhook Error:", err.stack || err.message);
-    res.sendStatus(200); // Prevent PayPal retries
+    res.sendStatus(200);
   }
 });
 
