@@ -121,7 +121,7 @@ app.get("/", (req, res) => {
   res.send("🚀 Server is running. PayPal API ready.");
 });
 
-app.post("/create-subscription", async (req, res) => {
+app.post("/api/paypal/subscription", async (req, res) => {
   try {
     const { planId, userId, tier, userEmail } = req.body;
     if (!planId || !userId || !tier) {
