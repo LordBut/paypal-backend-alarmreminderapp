@@ -57,66 +57,56 @@ class PayPalApiClient {
     }
   }
 
-  suspend fun createSubscription(planId: String, tier: String): SubscriptionResponse? {
-    return withContext(Dispatchers.IO) {
-      val accessToken = getAccessToken() ?: return@withContext null
-      val user = FirebaseAuth.getInstance().currentUser
-      val userId = user?.uid ?: return@withContext null
+  suspend fun createSubscription(
+    planId: String,
+    tier: String,
+    userId: String,
+    email: String
+  ): JSONObject? = withContext(Dispatchers.IO) {
+    val accessToken = getAccessToken() ?: return@withContext null
 
-      try {
-        val requestBody = JSONObject().apply {
-          put("plan_id", planId)
-          put("custom_id", userId)
-          put("subscriber", JSONObject().apply {
-            put("email_address", user.email ?: "unknown@example.com")
-          })
-          put("application_context", JSONObject().apply {
-            put("brand_name", "Alarm Reminder App")
-            put("locale", "en-US")
-            put("shipping_preference", "NO_SHIPPING")
-            put("user_action", "SUBSCRIBE_NOW")
-            put("return_url", "https://paypal-api-khmg.onrender.com/paypal/subscription/success?tier=$tier&plan_id=$planId")
-            put("cancel_url", "https://paypal-api-khmg.onrender.com/subscription/cancel")
-          })
-        }
-
-        val request = Request.Builder()
-          .url("$BACKEND_BASE_URL/subscription")
-          .post(requestBody.toString().toRequestBody(CONTENT_TYPE.toMediaTypeOrNull()))
-          .header(AUTHORIZATION, "Bearer $accessToken")
-          .header("Content-Type", CONTENT_TYPE)
-          .build()
-
-        client.newCall(request).execute().use { response ->
-          val responseBody = response.body?.string() ?: ""
-          if (response.isSuccessful) {
-            val jsonResponse = JSONObject(responseBody)
-            val approvalUrl = jsonResponse.getJSONArray("links")
-              .let { links ->
-                (0 until links.length())
-                  .map { links.getJSONObject(it) }
-                  .firstOrNull { it.getString("rel") == "approve" }
-                  ?.getString("href")
-              }
-
-            SubscriptionResponse(
-              subscriptionId = jsonResponse.getString("id"),
-              approvalUrl = approvalUrl
-            )
-          } else {
-            Log.e(TAG, "Create Subscription Error ${response.code}: $responseBody")
-            null
-          }
-        }
-      } catch (e: IOException) {
-        Log.e(TAG, "Create Subscription IOException: ${e.message}")
-        null
-      } catch (e: Exception) {
-        Log.e(TAG, "Create Subscription Exception: ${e.message}")
-        null
+    try {
+      val requestBody = JSONObject().apply {
+        put("plan_id", planId)
+        put("custom_id", userId)
+        put("subscriber", JSONObject().apply {
+          put("email_address", email)
+        })
+        put("application_context", JSONObject().apply {
+          put("brand_name", "Alarm Reminder App")
+          put("locale", "en-US")
+          put("shipping_preference", "NO_SHIPPING")
+          put("user_action", "SUBSCRIBE_NOW")
+          put("return_url", "alarmreminderapp://subscription/success?tier=$tier&plan_id=$planId")
+          put("cancel_url", "alarmreminderapp://subscription/cancel")
+        })
       }
+
+      val request = Request.Builder()
+        .url("$BACKEND_BASE_URL/subscription")
+        .post(requestBody.toString().toRequestBody(CONTENT_TYPE.toMediaTypeOrNull()))
+        .header(AUTHORIZATION, "Bearer $accessToken")
+        .header("Content-Type", CONTENT_TYPE)
+        .build()
+
+      client.newCall(request).execute().use { response ->
+        val responseBody = response.body?.string() ?: ""
+        if (response.isSuccessful) {
+          JSONObject(responseBody)
+        } else {
+          Log.e(TAG, "Create Subscription Error ${response.code}: $responseBody")
+          null
+        }
+      }
+    } catch (e: IOException) {
+      Log.e(TAG, "Create Subscription IOException: ${e.message}")
+      null
+    } catch (e: Exception) {
+      Log.e(TAG, "Create Subscription Exception: ${e.message}")
+      null
     }
   }
+
 
   suspend fun getSubscriptionStatus(subscriptionId: String): String? {
     return withContext(Dispatchers.IO) {
@@ -220,7 +210,7 @@ class PayPalApiClient {
     }
   }
 
-  suspend fun checkSubscriptionStatus(subscriptionId: String): Boolean {
+  suspend fun CheckSubscriptionStatus(subscriptionId: String): Boolean {
     return withContext(Dispatchers.IO) {
       getSubscriptionStatus(subscriptionId) == "ACTIVE"
     }

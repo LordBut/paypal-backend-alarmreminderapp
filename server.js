@@ -6,7 +6,6 @@ const cors = require("cors");
 const admin = require("firebase-admin");
 const path = require("path");
 
-// Load environment variables in non-production environments
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config();
 }
@@ -34,34 +33,29 @@ admin.initializeApp({
   }),
 });
 
-// 📌 Initialize Express
 const app = express();
-
-// 📌 Middleware
 app.use(cors());
 app.use(bodyParser.json());
 
-// ✅ Serve assetlinks.json from .well-known
+// ✅ Serve assetlinks.json
 app.use("/.well-known", express.static(path.join(__dirname, "public", ".well-known")));
 
-// ✅ Routes to respond to deep link paths
-app.get("/subscription/success", (req, res) => {
-  res.send("✅ Subscription success callback received.");
+// ✅ PayPal return & cancel URLs
+app.get("/paypal/subscription/success", (req, res) => {
+  const { subscription_id = "", tier = "", plan_id = "" } = req.query;
+  const redirectUrl = `alarmreminderapp://subscription/success?subscription_id=${encodeURIComponent(subscription_id)}&tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(plan_id)}`;
+  console.log(`➡️ Redirecting to app (PayPal): ${redirectUrl}`);
+  res.redirect(302, redirectUrl);
 });
 
 app.get("/subscription/cancel", (req, res) => {
-  res.send("❌ Subscription cancelled.");
+  console.log("➡️ Redirecting to cancel deep link.");
+  res.redirect(302, "alarmreminderapp://subscription/cancel");
 });
 
-// ✅ New route to handle PayPal return URL
-app.get("/paypal/subscription/success", (req, res) => {
-  res.send("✅ PayPal subscription successful. Thank you for subscribing.");
-});
-
-// 🔹 Get PayPal Access Token
+// 🔹 PayPal Access Token
 async function getPayPalAccessToken() {
   const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString("base64");
-
   try {
     const response = await axios.post(
       `${PAYPAL_API}/v1/oauth2/token`,
@@ -81,10 +75,9 @@ async function getPayPalAccessToken() {
 }
 
 // 🔹 Create PayPal Subscription
-async function createPayPalSubscription(planId, userId, tier) {
+async function createPayPalSubscription(planId, userId, tier, userEmail) {
   const accessToken = await getPayPalAccessToken();
-
-  const returnUrl = `alarmreminderapp://subscription/success?tier=${encodeURIComponent(tier)}&subscription_id=${subscriptionId}`;
+  const returnUrl = `https://paypal-api-khmg.onrender.com/paypal/subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(planId)}`;
   const cancelUrl = `https://paypal-api-khmg.onrender.com/subscription/cancel`;
 
   try {
@@ -93,8 +86,13 @@ async function createPayPalSubscription(planId, userId, tier) {
       {
         plan_id: planId,
         custom_id: userId,
+        subscriber: {
+          email_address: userEmail || "unknown@example.com",
+        },
         application_context: {
           brand_name: "Alarm Reminder App",
+          locale: "en-US",
+          shipping_preference: "NO_SHIPPING",
           user_action: "SUBSCRIBE_NOW",
           return_url: returnUrl,
           cancel_url: cancelUrl,
@@ -107,64 +105,123 @@ async function createPayPalSubscription(planId, userId, tier) {
         },
       }
     );
-
     const approvalUrl = response.data.links.find(link => link.rel === "approve")?.href;
-    return approvalUrl;
+    return {
+      subscriptionId: response.data.id,
+      approvalUrl,
+    };
   } catch (error) {
     console.error("❌ Failed to create PayPal subscription:", error.response?.data || error.message);
     throw new Error("Failed to create subscription");
   }
 }
 
-// ✅ Default route
+// ✅ Routes
 app.get("/", (req, res) => {
   res.send("🚀 Server is running. PayPal API ready.");
 });
 
-// ✅ Create Subscription Route
-app.post("/create-subscription", async (req, res) => {
+app.post("/api/paypal/subscription", async (req, res) => {
   try {
-    const { planId, userId, tier } = req.body;
+    const { planId, userId, tier, userEmail } = req.body;
     if (!planId || !userId || !tier) {
       return res.status(400).json({ error: "Missing planId, userId, or tier." });
     }
-
-    const approvalUrl = await createPayPalSubscription(planId, userId, tier);
-    res.json({ approvalUrl });
+    const result = await createPayPalSubscription(planId, userId, tier, userEmail);
+    res.json(result);
   } catch (error) {
+    console.error("❌ Error in /api/paypal/subscription:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ✅ PayPal Webhook Handler
+// 🔹 Webhook Handler
 app.post("/paypal/webhook", async (req, res) => {
-  const event = req.body;
-  console.log("📬 Webhook Event:", event.event_type);
-
   try {
-    if (event.event_type === "BILLING.SUBSCRIPTION.ACTIVATED") {
-      const { id: subscriptionId, plan_id: planId, custom_id: userId } = event.resource;
+    const { event_type, resource } = req.body;
+    if (!event_type || !resource || !resource.id) {
+      console.warn("⚠️ Incomplete webhook payload.");
+      return res.sendStatus(200);
+    }
 
-      if (userId) {
-        await admin.firestore().collection("users").doc(userId).set({
-          subscriptionId,
-          planId,
-          subscriptionStatus: "active",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
+    const subscriptionId = resource.id;
+    const planId = resource.plan_id || "";
+    const userId = resource.custom_id || "";
 
-        console.log(`✅ Subscription stored for user: ${userId}`);
-      }
+    console.log(`📬 Webhook received: ${event_type} for subscription ${subscriptionId} (User: ${userId})`);
+
+    const userRef = userId ? admin.firestore().collection("users").doc(userId) : null;
+
+    switch (event_type) {
+      case "BILLING.SUBSCRIPTION.ACTIVATED":
+        if (userRef) {
+          await userRef.set({
+            subscriptionId,
+            planId,
+            subscriptionStatus: "active",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          console.log(`✅ Subscription activated for user: ${userId}`);
+        }
+        break;
+
+      case "BILLING.SUBSCRIPTION.CANCELLED":
+        if (userRef) {
+          await userRef.set({
+            subscriptionStatus: "cancelled",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          console.log(`🔄 Subscription cancelled for user: ${userId}`);
+        }
+        break;
+
+      case "BILLING.SUBSCRIPTION.SUSPENDED":
+        if (userRef) {
+          await userRef.set({
+            subscriptionStatus: "suspended",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          console.log(`⏸️ Subscription suspended for user: ${userId}`);
+        }
+        break;
+
+      case "BILLING.SUBSCRIPTION.EXPIRED":
+        if (userRef) {
+          await userRef.set({
+            subscriptionStatus: "expired",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          console.log(`⌛ Subscription expired for user: ${userId}`);
+        }
+        break;
+
+      case "PAYMENT.SALE.COMPLETED":
+        console.log(`💰 Payment completed for subscription: ${subscriptionId}`);
+        break;
+
+      default:
+        console.log(`ℹ️ Unhandled event type: ${event_type}`);
     }
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("❌ Webhook Error:", err.message);
-    res.sendStatus(500);
+    console.error("❌ Webhook Error:", err.stack || err.message);
+    res.sendStatus(200);
+  }
+});
+
+// ✅ Retrieve PayPal Access Token
+app.get("/api/paypal/token", async (req, res) => {
+  try {
+    const accessToken = await getPayPalAccessToken();
+    res.json({ access_token: accessToken });
+  } catch (error) {
+    console.error("❌ Failed to retrieve PayPal token:", error.message);
+    res.status(500).json({ error: "Failed to retrieve PayPal token" });
   }
 });
 
 // ✅ Start Express Server
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
