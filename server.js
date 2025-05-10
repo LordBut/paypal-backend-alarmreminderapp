@@ -43,8 +43,13 @@ app.use("/.well-known", express.static(path.join(__dirname, "public", ".well-kno
 // ✅ PayPal return & cancel URLs
 app.get("/paypal/subscription/success", (req, res) => {
   const { subscription_id = "", tier = "", plan_id = "" } = req.query;
+
+  console.log("✅ PayPal success redirect triggered");
+  console.log(`👉 Received query params: subscription_id=${subscription_id}, tier=${tier}, plan_id=${plan_id}`);
+
   const redirectUrl = `alarmreminderapp://subscription/success?subscription_id=${encodeURIComponent(subscription_id)}&tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(plan_id)}`;
   console.log(`➡️ Redirecting to app (PayPal): ${redirectUrl}`);
+
   res.redirect(302, redirectUrl);
 });
 
@@ -76,9 +81,16 @@ async function getPayPalAccessToken() {
 
 // 🔹 Create PayPal Subscription
 async function createPayPalSubscription(planId, userId, tier, userEmail) {
+  console.log("📦 Creating PayPal subscription...");
+  console.log(`📨 Input: planId=${planId}, userId=${userId}, tier=${tier}, userEmail=${userEmail}`);
+
   const accessToken = await getPayPalAccessToken();
+
   const returnUrl = `https://paypal-api-khmg.onrender.com/paypal/subscription/success?tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(planId)}`;
   const cancelUrl = `https://paypal-api-khmg.onrender.com/subscription/cancel`;
+
+  console.log(`🔁 returnUrl: ${returnUrl}`);
+  console.log(`🔁 cancelUrl: ${cancelUrl}`);
 
   try {
     const response = await axios.post(
@@ -106,6 +118,8 @@ async function createPayPalSubscription(planId, userId, tier, userEmail) {
       }
     );
     const approvalUrl = response.data.links.find(link => link.rel === "approve")?.href;
+    console.log(`✅ Subscription created: id=${response.data.id}, approvalUrl=${approvalUrl}`);
+
     return {
       subscriptionId: response.data.id,
       approvalUrl,
@@ -124,7 +138,11 @@ app.get("/", (req, res) => {
 app.post("/api/paypal/subscription", async (req, res) => {
   try {
     const { planId, userId, tier, userEmail } = req.body;
+    console.log("📨 Received /api/paypal/subscription request");
+    console.log(`Body: planId=${planId}, userId=${userId}, tier=${tier}, userEmail=${userEmail}`);
+
     if (!planId || !userId || !tier) {
+      console.warn("⚠️ Missing required subscription data");
       return res.status(400).json({ error: "Missing planId, userId, or tier." });
     }
     const result = await createPayPalSubscription(planId, userId, tier, userEmail);
@@ -148,7 +166,7 @@ app.post("/paypal/webhook", async (req, res) => {
     const planId = resource.plan_id || "";
     const userId = resource.custom_id || "";
 
-    console.log(`📬 Webhook received: ${event_type} for subscription ${subscriptionId} (User: ${userId})`);
+    console.log(`📬 Webhook received: ${event_type} | subscriptionId=${subscriptionId}, userId=${userId}, planId=${planId}`);
 
     const userRef = userId ? admin.firestore().collection("users").doc(userId) : null;
 
