@@ -157,18 +157,25 @@ app.post("/api/paypal/subscription", async (req, res) => {
 app.post("/paypal/webhook", async (req, res) => {
   try {
     const { event_type, resource } = req.body;
+
+    // Log the entire webhook payload for debugging
+    console.log("📬 Full webhook payload:", JSON.stringify(req.body, null, 2));
+
     if (!event_type || !resource || !resource.id) {
       console.warn("⚠️ Incomplete webhook payload.");
       return res.sendStatus(200);
     }
 
     const subscriptionId = resource.id;
-    const planId = resource.plan_id || "";
-    const userId = resource.custom_id || "";
+    const planId = resource.plan_id || "N/A";
+    const userId = resource.custom_id || "N/A";
 
-    console.log(`📬 Webhook received: ${event_type} | subscriptionId=${subscriptionId}, userId=${userId}, planId=${planId}`);
+    console.log(`📬 Webhook received: ${event_type}`);
+    console.log(`🔍 Subscription ID: ${subscriptionId}`);
+    console.log(`🔍 Plan ID: ${planId}`);
+    console.log(`🔍 User ID: ${userId}`);
 
-    const userRef = userId ? admin.firestore().collection("users").doc(userId) : null;
+    const userRef = userId !== "N/A" ? admin.firestore().collection("users").doc(userId) : null;
 
     switch (event_type) {
       case "BILLING.SUBSCRIPTION.ACTIVATED":
