@@ -158,26 +158,32 @@ app.get("/", (req, res) => {
   res.send("🚀 Server is running. PayPal API ready.");
 });
 
+// Define valid plan IDs
+const validPlanIds = {
+  "Champ": "P-86R0994779441710RM65UV3A",
+  "Grandmaster": "P-7WC176265L221313GM7Y3DXI"
+};
+
 app.post("/api/paypal/subscription", async (req, res) => {
   try {
     const { planId, userId, tier, userEmail } = req.body;
     console.log("📨 Received /api/paypal/subscription request");
-    console.log(
-      `Body: planId=${planId}, userId=${userId}, tier=${tier}, userEmail=${userEmail}`
-    );
+    console.log(`Body: planId=${planId}, userId=${userId}, tier=${tier}, userEmail=${userEmail}`);
 
+    // Validate required fields
     if (!planId || !userId || !tier) {
       console.warn("⚠️ Missing required subscription data");
-      return res
-        .status(400)
-        .json({ error: "Missing planId, userId, or tier." });
+      return res.status(400).json({ error: "Missing planId, userId, or tier." });
     }
-    const result = await createPayPalSubscription(
-      planId,
-      userId,
-      tier,
-      userEmail
-    );
+
+    // Validate that the planId matches the expected value for the tier
+    if (validPlanIds[tier] !== planId) {
+      console.warn(`⚠️ Invalid planId for tier ${tier}`);
+      return res.status(400).json({ error: "Invalid planId for the specified tier." });
+    }
+
+    // Proceed to create the PayPal subscription
+    const result = await createPayPalSubscription(planId, userId, tier, userEmail);
     res.json(result);
   } catch (error) {
     console.error("❌ Error in /api/paypal/subscription:", error.message);
