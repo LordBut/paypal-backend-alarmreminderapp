@@ -1,7 +1,6 @@
 package com.alarmreminderapp.backend
 
 import android.util.Log
-import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.*
@@ -57,6 +56,44 @@ class PayPalApiClient {
     }
   }
 
+  suspend fun getSubscriptionDetails(subscriptionId: String): SubscriptionDetails? {
+    return withContext(Dispatchers.IO) {
+      try {
+        val accessToken = getAccessToken()
+        val url = "https://api-m.sandbox.paypal.com/v1/billing/subscriptions/$subscriptionId"
+        val request = Request.Builder()
+          .url(url)
+          .addHeader("Authorization", "Bearer $accessToken")
+          .addHeader("Content-Type", "application/json")
+          .build()
+
+        val client = OkHttpClient()
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+          Log.e("PayPalAPI", "Failed to fetch subscription details: ${response.code}")
+          return@withContext null
+        }
+
+        val responseBody = response.body?.string() ?: return@withContext null
+        val json = JSONObject(responseBody)
+
+        return@withContext SubscriptionDetails(
+          status = json.getString("status"),
+          planId = json.getString("plan_id")
+        )
+      } catch (e: Exception) {
+        Log.e("PayPalAPI", "Exception in getSubscriptionDetails: ${e.message}")
+        return@withContext null
+      }
+    }
+  }
+
+  data class SubscriptionDetails(
+    val status: String,
+    val planId: String
+  )
+
+
   suspend fun createSubscription(
     planId: String,
     tier: String,
@@ -66,9 +103,15 @@ class PayPalApiClient {
     val accessToken = getAccessToken() ?: return@withContext null
 
     try {
+      val customData = JSONObject().apply {
+        put("user_id", userId)
+        put("tier", tier)
+        put("plan_id", planId)
+      }.toString()
+
       val requestBody = JSONObject().apply {
         put("plan_id", planId)
-        put("custom_id", userId)
+        put("custom_id", customData)
         put("subscriber", JSONObject().apply {
           put("email_address", email)
         })
@@ -77,7 +120,7 @@ class PayPalApiClient {
           put("locale", "en-US")
           put("shipping_preference", "NO_SHIPPING")
           put("user_action", "SUBSCRIBE_NOW")
-          put("return_url", "alarmreminderapp://subscription/success?tier=$tier&plan_id=$planId")
+          put("return_url", "alarmreminderapp://subscription/success?tier=$tier&subscription_id=") // placeholder, actual ID added server-side
           put("cancel_url", "alarmreminderapp://subscription/cancel")
         })
       }
