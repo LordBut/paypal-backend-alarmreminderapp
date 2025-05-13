@@ -45,16 +45,15 @@ app.use(
 
 // ✅ PayPal return & cancel URLs
 app.get("/paypal/subscription/success", (req, res) => {
-  const { subscription_id = "", tier = "", plan_id = "" } = req.query;
+  const { subscription_id = "", tier = "" } = req.query;
 
   console.log("✅ PayPal success redirect triggered");
-  console.log(
-    `👉 Received query params: subscription_id=${subscription_id}, tier=${tier}, plan_id=${plan_id}`
-  );
+  console.log(`👉 Received query params: subscription_id=${subscription_id}, tier=${tier}`);
 
   const redirectUrl = `alarmreminderapp://subscription/success?subscription_id=${encodeURIComponent(
     subscription_id
-  )}&tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(plan_id)}`;
+  )}&tier=${encodeURIComponent(tier)}`;
+
   console.log(`➡️ Redirecting to app (PayPal): ${redirectUrl}`);
 
   res.redirect(302, redirectUrl);
