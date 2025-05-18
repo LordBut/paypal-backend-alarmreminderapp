@@ -103,26 +103,12 @@ class PayPalApiClient {
     val accessToken = getAccessToken() ?: return@withContext null
 
     try {
-      val customData = JSONObject().apply {
-        put("user_id", userId)
-        put("tier", tier)
-        put("plan_id", planId)
-      }.toString()
-
+      // ✅ Send flat fields directly as expected by the backend
       val requestBody = JSONObject().apply {
-        put("plan_id", planId)
-        put("custom_id", customData)
-        put("subscriber", JSONObject().apply {
-          put("email_address", email)
-        })
-        put("application_context", JSONObject().apply {
-          put("brand_name", "Alarm Reminder App")
-          put("locale", "en-US")
-          put("shipping_preference", "NO_SHIPPING")
-          put("user_action", "SUBSCRIBE_NOW")
-          put("return_url", "alarmreminderapp://subscription/success?tier=$tier&subscription_id=") // placeholder, actual ID added server-side
-          put("cancel_url", "alarmreminderapp://subscription/cancel")
-        })
+        put("planId", planId)
+        put("userId", userId)
+        put("tier", tier)
+        put("userEmail", email)
       }
 
       val request = Request.Builder()
@@ -149,7 +135,6 @@ class PayPalApiClient {
       null
     }
   }
-
 
   suspend fun getSubscriptionStatus(subscriptionId: String): String? {
     return withContext(Dispatchers.IO) {
