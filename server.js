@@ -99,7 +99,7 @@ async function createPayPalSubscription(planId, userId, tier, userEmail) {
 
   const accessToken = await getPayPalAccessToken();
 
-  const returnUrl = `https://paypal-api-khmg.onrender.com/paypal/subscription/success?tier=${encodeURIComponent(tier)}&subscription_id={subscription_id}`;
+  const returnUrl = `https://paypal-api-khmg.onrender.com/paypal/subscription/success?tier=${encodeURIComponent(tier)}`;
   const cancelUrl = `https://paypal-api-khmg.onrender.com/subscription/cancel`;
 
   console.log(`🔁 returnUrl: ${returnUrl}`);
