@@ -45,14 +45,14 @@ app.use(
 
 // ✅ PayPal return & cancel URLs
 app.get("/paypal/subscription/success", (req, res) => {
-  const { subscription_id = "", tier = "" } = req.query;
+  const { subscription_id = "", tier = "", plan_id = "" } = req.query;
 
   console.log("✅ PayPal success redirect triggered");
-  console.log(`👉 Received query params: subscription_id=${subscription_id}, tier=${tier}`);
+  console.log(`👉 Received query params: subscription_id=${subscription_id}, tier=${tier}, plan_id=${plan_id}`);
 
   const redirectUrl = `alarmreminderapp://subscription/success?subscription_id=${encodeURIComponent(
     subscription_id
-  )}&tier=${encodeURIComponent(tier)}`;
+  )}&tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(plan_id)}`;
 
   console.log(`➡️ Redirecting to app (PayPal): ${redirectUrl}`);
 
@@ -99,7 +99,7 @@ async function createPayPalSubscription(planId, userId, tier, userEmail) {
 
   const accessToken = await getPayPalAccessToken();
 
-  const returnUrl = `https://paypal-api-khmg.onrender.com/paypal/subscription/success?tier=${encodeURIComponent(tier)}`;
+  const returnUrl = `https://paypal-api-khmg.onrender.com/paypal/subscription/success?subscription_id={subscription_id}&tier=${encodeURIComponent(tier)}&plan_id=${encodeURIComponent(planId)}`;
   const cancelUrl = `https://paypal-api-khmg.onrender.com/subscription/cancel`;
 
   console.log(`🔁 returnUrl: ${returnUrl}`);
