@@ -44,6 +44,7 @@ app.use(
 );
 
 // ✅ PayPal return & cancel URLs
+// ✅ PayPal success redirect handler (unchanged)
 app.get("/paypal/subscription/success", (req, res) => {
   const { subscription_id = "", tier = "", plan_id = "" } = req.query;
 
@@ -57,6 +58,24 @@ app.get("/paypal/subscription/success", (req, res) => {
   console.log(`➡️ Redirecting to app (PayPal): ${redirectUrl}`);
 
   res.redirect(302, redirectUrl);
+});
+
+// ✅ New POST route for notifying backend of success (required for Android to succeed)
+app.post("/api/paypal/subscription/:subscriptionId/success", (req, res) => {
+  const { subscriptionId } = req.params;
+  const { planId, tier } = req.body;
+
+  if (!planId || !tier) {
+    console.warn(`⚠️ Missing planId or tier in body. planId=${planId}, tier=${tier}`);
+    return res.status(400).json({ error: "Missing planId or tier" });
+  }
+
+  console.log(`✅ Success notification received for subscription ${subscriptionId}`);
+  console.log(`📦 Tier: ${tier}, Plan ID: ${planId}`);
+
+  // 🔁 Optionally update internal state, log to DB, etc.
+
+  res.sendStatus(200);
 });
 
 app.get("/subscription/cancel", (req, res) => {
