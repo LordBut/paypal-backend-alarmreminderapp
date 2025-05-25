@@ -83,6 +83,38 @@ app.get("/subscription/cancel", (req, res) => {
   res.redirect(302, "alarmreminderapp://subscription/cancel");
 });
 
+app.post("/api/paypal/subscription/:subscriptionId/cancel", async (req, res) => {
+  const { subscriptionId } = req.params;
+  const { reason = "User requested cancellation" } = req.body;
+
+  try {
+    const accessToken = await getPayPalAccessToken();
+
+    const response = await axios.post(
+      `${PAYPAL_API}/v1/billing/subscriptions/${subscriptionId}/cancel`,
+      { reason },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+
+    if (response.status === 204) {
+      console.log(`✅ Subscription ${subscriptionId} successfully canceled.`);
+      res.sendStatus(204);
+    } else {
+      console.warn(`⚠️ Unexpected response status: ${response.status}`);
+      res.status(response.status).json({ error: "Unexpected response from PayPal." });
+    }
+  } catch (error) {
+    console.error("❌ Error canceling subscription:", error.response?.data || error.message);
+    res.status(500).json({ error: "Failed to cancel subscription." });
+  }
+});
+
+
 // 🔹 PayPal Access Token
 async function getPayPalAccessToken() {
   const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString(
