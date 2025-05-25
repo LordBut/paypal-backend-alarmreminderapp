@@ -136,38 +136,6 @@ class PayPalApiClient {
     }
   }
 
-  suspend fun getSubscriptionStatus(subscriptionId: String): String? {
-    return withContext(Dispatchers.IO) {
-      val accessToken = getAccessToken() ?: return@withContext null
-
-      try {
-        val request = Request.Builder()
-          .url("$BACKEND_BASE_URL/subscription/$subscriptionId")
-          .get()
-          .header(AUTHORIZATION, "Bearer $accessToken")
-          .header("Content-Type", CONTENT_TYPE)
-          .build()
-
-        client.newCall(request).execute().use { response ->
-          val responseBody = response.body?.string() ?: ""
-          if (response.isSuccessful) {
-            val jsonResponse = JSONObject(responseBody)
-            jsonResponse.getString("status")
-          } else {
-            Log.e(TAG, "Get Status Error ${response.code}: $responseBody")
-            null
-          }
-        }
-      } catch (e: IOException) {
-        Log.e(TAG, "Get Status IOException: ${e.message}")
-        null
-      } catch (e: Exception) {
-        Log.e(TAG, "Get Status Exception: ${e.message}")
-        null
-      }
-    }
-  }
-
   suspend fun cancelSubscription(subscriptionId: String): Boolean {
     return withContext(Dispatchers.IO) {
       val accessToken = getAccessToken() ?: return@withContext false
@@ -235,12 +203,6 @@ class PayPalApiClient {
         Log.e(TAG, "❌ Notify Success Exception: ${e.message}")
         false
       }
-    }
-  }
-
-  suspend fun CheckSubscriptionStatus(subscriptionId: String): Boolean {
-    return withContext(Dispatchers.IO) {
-      getSubscriptionStatus(subscriptionId) == "ACTIVE"
     }
   }
 }
