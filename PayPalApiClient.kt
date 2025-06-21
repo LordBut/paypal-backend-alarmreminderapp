@@ -1,7 +1,6 @@
 package com.alarmreminderapp.backend
 
 import android.util.Log
-import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.*
@@ -57,6 +56,44 @@ class PayPalApiClient {
     }
   }
 
+  suspend fun getSubscriptionDetails(subscriptionId: String): SubscriptionDetails? {
+    return withContext(Dispatchers.IO) {
+      try {
+        val accessToken = getAccessToken()
+        val url = "https://api-m.sandbox.paypal.com/v1/billing/subscriptions/$subscriptionId"
+        val request = Request.Builder()
+          .url(url)
+          .addHeader("Authorization", "Bearer $accessToken")
+          .addHeader("Content-Type", "application/json")
+          .build()
+
+        val client = OkHttpClient()
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+          Log.e("PayPalAPI", "Failed to fetch subscription details: ${response.code}")
+          return@withContext null
+        }
+
+        val responseBody = response.body?.string() ?: return@withContext null
+        val json = JSONObject(responseBody)
+
+        return@withContext SubscriptionDetails(
+          status = json.getString("status"),
+          planId = json.getString("plan_id")
+        )
+      } catch (e: Exception) {
+        Log.e("PayPalAPI", "Exception in getSubscriptionDetails: ${e.message}")
+        return@withContext null
+      }
+    }
+  }
+
+  data class SubscriptionDetails(
+    val status: String,
+    val planId: String
+  )
+
+
   suspend fun createSubscription(
     planId: String,
     tier: String,
@@ -66,20 +103,12 @@ class PayPalApiClient {
     val accessToken = getAccessToken() ?: return@withContext null
 
     try {
+      // ✅ Send flat fields directly as expected by the backend
       val requestBody = JSONObject().apply {
-        put("plan_id", planId)
-        put("custom_id", userId)
-        put("subscriber", JSONObject().apply {
-          put("email_address", email)
-        })
-        put("application_context", JSONObject().apply {
-          put("brand_name", "Alarm Reminder App")
-          put("locale", "en-US")
-          put("shipping_preference", "NO_SHIPPING")
-          put("user_action", "SUBSCRIBE_NOW")
-          put("return_url", "alarmreminderapp://subscription/success?tier=$tier&plan_id=$planId")
-          put("cancel_url", "alarmreminderapp://subscription/cancel")
-        })
+        put("planId", planId)
+        put("userId", userId)
+        put("tier", tier)
+        put("userEmail", email)
       }
 
       val request = Request.Builder()
@@ -104,39 +133,6 @@ class PayPalApiClient {
     } catch (e: Exception) {
       Log.e(TAG, "Create Subscription Exception: ${e.message}")
       null
-    }
-  }
-
-
-  suspend fun getSubscriptionStatus(subscriptionId: String): String? {
-    return withContext(Dispatchers.IO) {
-      val accessToken = getAccessToken() ?: return@withContext null
-
-      try {
-        val request = Request.Builder()
-          .url("$BACKEND_BASE_URL/subscription/$subscriptionId")
-          .get()
-          .header(AUTHORIZATION, "Bearer $accessToken")
-          .header("Content-Type", CONTENT_TYPE)
-          .build()
-
-        client.newCall(request).execute().use { response ->
-          val responseBody = response.body?.string() ?: ""
-          if (response.isSuccessful) {
-            val jsonResponse = JSONObject(responseBody)
-            jsonResponse.getString("status")
-          } else {
-            Log.e(TAG, "Get Status Error ${response.code}: $responseBody")
-            null
-          }
-        }
-      } catch (e: IOException) {
-        Log.e(TAG, "Get Status IOException: ${e.message}")
-        null
-      } catch (e: Exception) {
-        Log.e(TAG, "Get Status Exception: ${e.message}")
-        null
-      }
     }
   }
 
@@ -207,12 +203,6 @@ class PayPalApiClient {
         Log.e(TAG, "❌ Notify Success Exception: ${e.message}")
         false
       }
-    }
-  }
-
-  suspend fun CheckSubscriptionStatus(subscriptionId: String): Boolean {
-    return withContext(Dispatchers.IO) {
-      getSubscriptionStatus(subscriptionId) == "ACTIVE"
     }
   }
 }
