@@ -56,6 +56,7 @@ class PayPalApiClient {
     }
   }
 
+  // ✅ Fetch subscription details and extract payerEmail
   suspend fun getSubscriptionDetails(subscriptionId: String): SubscriptionDetails? {
     return withContext(Dispatchers.IO) {
       try {
@@ -67,32 +68,36 @@ class PayPalApiClient {
           .addHeader("Content-Type", "application/json")
           .build()
 
-        val client = OkHttpClient()
-        val response = client.newCall(request).execute()
-        if (!response.isSuccessful) {
-          Log.e("PayPalAPI", "Failed to fetch subscription details: ${response.code}")
-          return@withContext null
+        client.newCall(request).execute().use { response ->
+          if (!response.isSuccessful) {
+            Log.e(TAG, "❌ Failed to fetch subscription details: ${response.code}")
+            return@withContext null
+          }
+
+          val responseBody = response.body?.string() ?: return@withContext null
+          val json = JSONObject(responseBody)
+
+          val subscriber = json.optJSONObject("subscriber")
+          val payerEmail = subscriber?.optString("email_address")
+
+          return@withContext SubscriptionDetails(
+            status = json.getString("status"),
+            planId = json.getString("plan_id"),
+            payerEmail = payerEmail
+          )
         }
-
-        val responseBody = response.body?.string() ?: return@withContext null
-        val json = JSONObject(responseBody)
-
-        return@withContext SubscriptionDetails(
-          status = json.getString("status"),
-          planId = json.getString("plan_id")
-        )
       } catch (e: Exception) {
-        Log.e("PayPalAPI", "Exception in getSubscriptionDetails: ${e.message}")
-        return@withContext null
+        Log.e(TAG, "❌ Exception in getSubscriptionDetails: ${e.message}")
+        null
       }
     }
   }
 
   data class SubscriptionDetails(
     val status: String,
-    val planId: String
+    val planId: String,
+    val payerEmail: String?
   )
-
 
   suspend fun createSubscription(
     planId: String,
@@ -103,7 +108,6 @@ class PayPalApiClient {
     val accessToken = getAccessToken() ?: return@withContext null
 
     try {
-      // ✅ Send flat fields directly as expected by the backend
       val requestBody = JSONObject().apply {
         put("planId", planId)
         put("userId", userId)
@@ -123,15 +127,15 @@ class PayPalApiClient {
         if (response.isSuccessful) {
           JSONObject(responseBody)
         } else {
-          Log.e(TAG, "Create Subscription Error ${response.code}: $responseBody")
+          Log.e(TAG, "❌ Create Subscription Error ${response.code}: $responseBody")
           null
         }
       }
     } catch (e: IOException) {
-      Log.e(TAG, "Create Subscription IOException: ${e.message}")
+      Log.e(TAG, "❌ Create Subscription IOException: ${e.message}")
       null
     } catch (e: Exception) {
-      Log.e(TAG, "Create Subscription Exception: ${e.message}")
+      Log.e(TAG, "❌ Create Subscription Exception: ${e.message}")
       null
     }
   }
@@ -154,7 +158,7 @@ class PayPalApiClient {
             true
           } else {
             val responseBody = response.body?.string() ?: ""
-            Log.e(TAG, "❌ Failed to cancel subscription $subscriptionId: ${response.code} - $responseBody")
+            Log.e(TAG, "❌ Cancel Subscription Error ${response.code}: $responseBody")
             false
           }
         }
@@ -192,7 +196,7 @@ class PayPalApiClient {
             true
           } else {
             val responseBody = response.body?.string() ?: ""
-            Log.e(TAG, "❌ Failed to notify success: ${response.code} - $responseBody")
+            Log.e(TAG, "❌ Failed to notify backend: ${response.code} - $responseBody")
             false
           }
         }
