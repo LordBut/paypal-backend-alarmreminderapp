@@ -287,10 +287,19 @@ app.post("/paypal/webhook", async (req, res) => {
           await userRef.set(
             {
               subscriptionStatus: "cancelled",
+              subscription_tier: "Free", // ⬅️ Reset tier
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             },
             { merge: true }
           );
+
+          await userRef.collection("subscriptions").doc("current").set({
+            status: "cancelled",
+            tier: "Free",
+            planId: null,
+            subscriptionId: null,
+            timestamp: Date.now()
+          });
           console.log(`🔄 Subscription cancelled for user: ${userId}`);
         }
         break;
