@@ -244,9 +244,8 @@ app.post("/paypal/webhook", async (req, res) => {
   try {
     const { event_type, resource } = req.body;
 
-    // Log the entire webhook payload for debugging
+    // 🧾 Log entire payload for debugging
     console.log("📬 Full webhook payload:", JSON.stringify(req.body, null, 2));
-
     if (!event_type || !resource || !resource.id) {
       console.warn("⚠️ Incomplete webhook payload.");
       return res.sendStatus(200);
@@ -255,43 +254,75 @@ app.post("/paypal/webhook", async (req, res) => {
     const subscriptionId = resource.id;
     const planId = resource.plan_id || "N/A";
     const userId = resource.custom_id || "N/A";
+    const payerEmail = resource?.subscriber?.email_address;
 
     console.log(`📬 Webhook received: ${event_type}`);
     console.log(`🔍 Subscription ID: ${subscriptionId}`);
     console.log(`🔍 Plan ID: ${planId}`);
     console.log(`🔍 User ID: ${userId}`);
+    console.log(`🔍 Payer Email: ${payerEmail}`);
 
-    const userRef =
-      userId !== "N/A"
-        ? admin.firestore().collection("users").doc(userId)
-        : null;
+    const db = admin.firestore();
+    const userRef = userId !== "N/A" ? db.collection("users").doc(userId) : null;
 
     switch (event_type) {
       case "BILLING.SUBSCRIPTION.ACTIVATED":
-        if (userRef) {
-          await userRef.set(
-            {
-              subscriptionId,
-              planId,
-              subscriptionStatus: "active",
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
-          console.log(`✅ Subscription activated for user: ${userId}`);
+        if (payerEmail && userRef) {
+          // 🛑 Prevent duplicate PayPal email across accounts
+          const existingUsers = await db.collection("users")
+            .where("payerEmail", "==", payerEmail)
+            .get();
+
+          const conflict = existingUsers.docs.find(doc => doc.id !== userId);
+          if (conflict) {
+            console.warn(`🚫 PayPal email ${payerEmail} already used by user ${conflict.id}. Canceling subscription ${subscriptionId}.`);
+
+            const token = await getPayPalAccessToken();
+            await axios.post(
+              `${PAYPAL_API}/v1/billing/subscriptions/${subscriptionId}/cancel`,
+              { reason: "Duplicate PayPal email used by another account." },
+              {
+                headers: {
+                  "Authorization": `Bearer ${token}`,
+                  "Content-Type": "application/json"
+                }
+              }
+            );
+
+            return res.sendStatus(200);
+          }
+
+          // ✅ No conflict, save subscription
+          const tier = planId.includes("GM") ? "Grandmaster" : "Champ";
+          await userRef.set({
+            subscriptionId,
+            planId,
+            subscriptionStatus: "active",
+            payerEmail,
+            subscription_tier: tier,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+
+          await userRef.collection("subscriptions").doc("current").set({
+            status: "active",
+            tier,
+            planId,
+            subscriptionId,
+            payerEmail,
+            timestamp: Date.now()
+          });
+
+          console.log(`✅ Subscription activated and saved for user: ${userId}`);
         }
         break;
 
       case "BILLING.SUBSCRIPTION.CANCELLED":
         if (userRef) {
-          await userRef.set(
-            {
-              subscriptionStatus: "cancelled",
-              subscription_tier: "Free", // ⬅️ Reset tier
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
+          await userRef.set({
+            subscriptionStatus: "cancelled",
+            subscription_tier: "Free",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
 
           await userRef.collection("subscriptions").doc("current").set({
             status: "cancelled",
@@ -300,45 +331,37 @@ app.post("/paypal/webhook", async (req, res) => {
             subscriptionId: null,
             timestamp: Date.now()
           });
+
           console.log(`🔄 Subscription cancelled for user: ${userId}`);
         }
         break;
 
       case "BILLING.SUBSCRIPTION.SUSPENDED":
         if (userRef) {
-          await userRef.set(
-            {
-              subscriptionStatus: "suspended",
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
+          await userRef.set({
+            subscriptionStatus: "suspended",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
           console.log(`⏸️ Subscription suspended for user: ${userId}`);
         }
         break;
 
       case "BILLING.SUBSCRIPTION.EXPIRED":
         if (userRef) {
-          await userRef.set(
-            {
-              subscriptionStatus: "expired",
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
+          await userRef.set({
+            subscriptionStatus: "expired",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
           console.log(`⌛ Subscription expired for user: ${userId}`);
         }
         break;
 
       case "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
         if (userRef) {
-          await userRef.set(
-            {
-              subscriptionStatus: "payment_failed",
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
+          await userRef.set({
+            subscriptionStatus: "payment_failed",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
           console.log(`❌ Payment failed for user: ${userId}`);
         }
         break;
