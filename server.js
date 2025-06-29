@@ -5,6 +5,7 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const admin = require("firebase-admin");
 const path = require("path");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config();
@@ -390,6 +391,100 @@ app.get("/api/paypal/token", async (req, res) => {
     console.error("❌ Failed to retrieve PayPal token:", error.message);
     res.status(500).json({ error: "Failed to retrieve PayPal token" });
   }
+});
+
+// Create Stripe Subscription via Checkout session
+app.post("/api/stripe/create-subscription", async (req, res) => {
+  const { stripeCustomerId, priceId, tier, uid } = req.body;
+  if (!stripeCustomerId || !priceId || !tier || !uid) {
+    return res.status(400).json({ error: "Missing stripeCustomerId, priceId, tier, or uid" });
+  }
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      customer: stripeCustomerId,
+      payment_method_types: ["card"],
+      mode: "subscription",
+      line_items: [{ price: priceId, quantity: 1 }],
+      subscription_data: { metadata: { uid, tier } },
+      success_url: `${process.env.FRONTEND_URL}/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.FRONTEND_URL}/stripe/cancel`,
+    });
+
+    res.json({ checkoutUrl: session.url });
+  } catch (err) {
+    console.error("Stripe create-subscription error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/webhook/stripe", bodyParser.raw({ type: "application/json" }), async (req, res) => {
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      req.headers["stripe-signature"],
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.log("⚠️ Webhook signature mismatch.", err.message);
+    return res.sendStatus(400);
+  }
+
+  const db = admin.firestore();
+  switch (event.type) {
+    case "checkout.session.completed": {
+      const session = event.data.object;
+      const subId = session.subscription;
+      const uid = session.metadata.uid;
+      const tier = session.metadata.tier;
+      const customer = session.customer;
+
+      // Activation logic
+      const userRef = db.collection("users").doc(uid);
+      await userRef.set({
+        stripeSubscriptionId: subId,
+        subscription_tier: tier,
+        subscriptionStatus: "active",
+        stripeCustomerId: customer,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      await userRef.collection("subscriptions").doc("current").set({
+        subscriptionId: subId,
+        tier,
+        status: "active",
+        paymentProvider: "stripe",
+        timestamp: Date.now(),
+      });
+      break;
+    }
+    case "customer.subscription.deleted":
+    case "customer.subscription.updated": {
+      const sub = event.data.object;
+      if (sub.status === "canceled" || sub.status === "incomplete_expired" || sub.status === "unpaid") {
+        const uid = sub.metadata.uid;
+        const userRef = db.collection("users").doc(uid);
+        await userRef.set({
+          subscription_tier: "Free",
+          subscriptionStatus: "cancelled",
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        await userRef.collection("subscriptions").doc("current").set({
+          subscriptionId: null,
+          tier: "Free",
+          status: "cancelled",
+          paymentProvider: "stripe",
+          timestamp: Date.now(),
+        });
+      }
+      break;
+    }
+    default:
+      break;
+  }
+
+  res.json({ received: true });
 });
 
 // ✅ Start Express Server
