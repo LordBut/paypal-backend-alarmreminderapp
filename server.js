@@ -415,8 +415,8 @@ app.post("/api/stripe/create-subscription", async (req, res) => {
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
       subscription_data: { metadata: { uid, tier } },
-      success_url: `${YOUR_APP_URL}/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${YOUR_APP_URL}/stripe/cancel`,
+      success_url: `$https://paypal-api-khmg.onrender.com/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `$https://paypal-api-khmg.onrender.com/stripe/cancel`,
     });
 
     res.json({ checkoutUrl: session.url });
