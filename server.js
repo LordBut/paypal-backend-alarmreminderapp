@@ -395,20 +395,28 @@ app.get("/api/paypal/token", async (req, res) => {
 
 // Create Stripe Subscription via Checkout session
 app.post("/api/stripe/create-subscription", async (req, res) => {
-  const { stripeCustomerId, priceId, tier, uid } = req.body;
-  if (!stripeCustomerId || !priceId || !tier || !uid) {
-    return res.status(400).json({ error: "Missing stripeCustomerId, priceId, tier, or uid" });
+  const { uid, email, priceId, tier } = req.body;
+  if (!uid || !email || !priceId || !tier) {
+    return res.status(400).json({ error: "Missing uid, email, priceId or tier" });
   }
 
   try {
+    let customer;
+    const users = await stripe.customers.list({ email, limit: 1 });
+    if (users.data.length > 0) {
+      customer = users.data[0];
+    } else {
+      customer = await stripe.customers.create({ email, metadata: { uid } });
+    }
+
     const session = await stripe.checkout.sessions.create({
-      customer: stripeCustomerId,
+      customer: customer.id,
       payment_method_types: ["card"],
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
       subscription_data: { metadata: { uid, tier } },
-      success_url: `${process.env.FRONTEND_URL}/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL}/stripe/cancel`,
+      success_url: `${YOUR_APP_URL}/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${YOUR_APP_URL}/stripe/cancel`,
     });
 
     res.json({ checkoutUrl: session.url });
@@ -418,8 +426,9 @@ app.post("/api/stripe/create-subscription", async (req, res) => {
   }
 });
 
-app.post("/webhook/stripe", bodyParser.raw({ type: "application/json" }), async (req, res) => {
+app.post("/webhook/stripe", express.raw({ type: "application/json" }), async (req, res) => {
   let event;
+
   try {
     event = stripe.webhooks.constructEvent(
       req.body,
@@ -427,64 +436,62 @@ app.post("/webhook/stripe", bodyParser.raw({ type: "application/json" }), async 
       process.env.STRIPE_WEBHOOK_SECRET
     );
   } catch (err) {
-    console.log("⚠️ Webhook signature mismatch.", err.message);
-    return res.sendStatus(400);
+    console.error("⚠️ Stripe webhook signature verification failed:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
   const db = admin.firestore();
-  switch (event.type) {
-    case "checkout.session.completed": {
-      const session = event.data.object;
-      const subId = session.subscription;
-      const uid = session.metadata.uid;
-      const tier = session.metadata.tier;
-      const customer = session.customer;
+  const data = event.data.object;
 
-      // Activation logic
-      const userRef = db.collection("users").doc(uid);
-      await userRef.set({
-        stripeSubscriptionId: subId,
-        subscription_tier: tier,
-        subscriptionStatus: "active",
-        stripeCustomerId: customer,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
+  try {
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const subId = data.subscription;
+        const uid = data.metadata?.uid;
+        const tier = data.metadata?.tier;
+        const customer = data.customer;
 
-      await userRef.collection("subscriptions").doc("current").set({
-        subscriptionId: subId,
-        tier,
-        status: "active",
-        paymentProvider: "stripe",
-        timestamp: Date.now(),
-      });
-      break;
-    }
-    case "customer.subscription.deleted":
-    case "customer.subscription.updated": {
-      const sub = event.data.object;
-      if (sub.status === "canceled" || sub.status === "incomplete_expired" || sub.status === "unpaid") {
-        const uid = sub.metadata.uid;
-        const userRef = db.collection("users").doc(uid);
-        await userRef.set({
-          subscription_tier: "Free",
-          subscriptionStatus: "cancelled",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-        await userRef.collection("subscriptions").doc("current").set({
-          subscriptionId: null,
-          tier: "Free",
-          status: "cancelled",
-          paymentProvider: "stripe",
-          timestamp: Date.now(),
-        });
+        if (uid && subId && tier) {
+          await updateSubscriptionInFirestore(uid, subId, tier, "active", "stripe", customer);
+        }
+        break;
       }
-      break;
-    }
-    default:
-      break;
-  }
 
-  res.json({ received: true });
+      case "invoice.paid":
+      case "customer.subscription.created":
+      case "customer.subscription.updated": {
+        const sub = data;
+        const uid = sub.metadata?.uid;
+        const tier = sub.metadata?.tier;
+        const status = sub.status;
+        const customer = sub.customer;
+
+        if (uid && tier && customer) {
+          await updateSubscriptionInFirestore(uid, sub.id, tier, status, "stripe", customer);
+        }
+        break;
+      }
+
+      case "customer.subscription.deleted": {
+        const sub = data;
+        const uid = sub.metadata?.uid;
+
+        if (uid) {
+          await updateSubscriptionInFirestore(uid, null, "Free", "cancelled", "stripe");
+        }
+        break;
+      }
+
+      default:
+        console.log(`ℹ️ Unhandled Stripe event: ${event.type}`);
+        break;
+    }
+
+    res.json({ received: true });
+  } catch (error) {
+    console.error("❌ Error processing Stripe webhook:", error);
+    res.status(500).send("Webhook handling failed.");
+  }
 });
 
 // ✅ Start Express Server
