@@ -36,7 +36,6 @@ admin.initializeApp({
 
 const app = express();
 app.use(cors());
-app.use(bodyParser.json());
 
 // ✅ Serve assetlinks.json
 app.use(
@@ -426,9 +425,8 @@ app.post("/api/stripe/create-subscription", async (req, res) => {
   }
 });
 
-app.post("/webhook/stripe", express.raw({ type: "application/json" }), async (req, res) => {
+app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res) => {
   let event;
-
   try {
     event = stripe.webhooks.constructEvent(
       req.body,
@@ -440,59 +438,67 @@ app.post("/webhook/stripe", express.raw({ type: "application/json" }), async (re
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  const db = admin.firestore();
-  const data = event.data.object;
+  // ✅ Immediately acknowledge receipt to avoid timeouts
+  res.status(200).json({ received: true });
 
-  try {
-    switch (event.type) {
-      case "checkout.session.completed": {
-        const subId = data.subscription;
-        const uid = data.metadata?.uid;
-        const tier = data.metadata?.tier;
-        const customer = data.customer;
+  // 🔄 Process event in background
+  (async () => {
+    const db = admin.firestore();
+    const data = event.data.object;
 
-        if (uid && subId && tier) {
-          await updateSubscriptionInFirestore(uid, subId, tier, "active", "stripe", customer);
+    try {
+      switch (event.type) {
+        case "checkout.session.completed": {
+          const subId = data.subscription;
+          const uid = data.metadata?.uid;
+          const tier = data.metadata?.tier;
+          const customer = data.customer;
+
+          if (uid && subId && tier) {
+            await updateSubscriptionInFirestore(uid, subId, tier, "active", "stripe", customer);
+            console.log(`✅ Stripe checkout.session.completed saved for user ${uid}`);
+          }
+          break;
         }
-        break;
-      }
 
-      case "invoice.paid":
-      case "customer.subscription.created":
-      case "customer.subscription.updated": {
-        const sub = data;
-        const uid = sub.metadata?.uid;
-        const tier = sub.metadata?.tier;
-        const status = sub.status;
-        const customer = sub.customer;
+        case "invoice.paid":
+        case "customer.subscription.created":
+        case "customer.subscription.updated": {
+          const sub = data;
+          const uid = sub.metadata?.uid;
+          const tier = sub.metadata?.tier;
+          const status = sub.status;
+          const customer = sub.customer;
 
-        if (uid && tier && customer) {
-          await updateSubscriptionInFirestore(uid, sub.id, tier, status, "stripe", customer);
+          if (uid && tier && customer) {
+            await updateSubscriptionInFirestore(uid, sub.id, tier, status, "stripe", customer);
+            console.log(`✅ Stripe subscription updated: user=${uid}, status=${status}`);
+          }
+          break;
         }
-        break;
-      }
 
-      case "customer.subscription.deleted": {
-        const sub = data;
-        const uid = sub.metadata?.uid;
+        case "customer.subscription.deleted": {
+          const sub = data;
+          const uid = sub.metadata?.uid;
 
-        if (uid) {
-          await updateSubscriptionInFirestore(uid, null, "Free", "cancelled", "stripe");
+          if (uid) {
+            await updateSubscriptionInFirestore(uid, null, "Free", "cancelled", "stripe");
+            console.log(`🔄 Stripe subscription cancelled: user=${uid}`);
+          }
+          break;
         }
-        break;
-      }
 
-      default:
-        console.log(`ℹ️ Unhandled Stripe event: ${event.type}`);
-        break;
+        default:
+          console.log(`ℹ️ Unhandled Stripe event: ${event.type}`);
+          break;
+      }
+    } catch (error) {
+      console.error("❌ Error processing Stripe webhook:", error);
     }
-
-    res.json({ received: true });
-  } catch (error) {
-    console.error("❌ Error processing Stripe webhook:", error);
-    res.status(500).send("Webhook handling failed.");
-  }
+  })();
 });
+
+app.use(bodyParser.json());
 
 // ✅ Start Express Server
 app.listen(PORT, () => {
