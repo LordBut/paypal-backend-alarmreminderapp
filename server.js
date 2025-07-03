@@ -392,39 +392,6 @@ app.get("/api/paypal/token", async (req, res) => {
   }
 });
 
-// Create Stripe Subscription via Checkout session
-app.post("/api/stripe/create-subscription", async (req, res) => {
-  const { uid, email, priceId, tier } = req.body;
-  if (!uid || !email || !priceId || !tier) {
-    return res.status(400).json({ error: "Missing uid, email, priceId or tier" });
-  }
-
-  try {
-    let customer;
-    const users = await stripe.customers.list({ email, limit: 1 });
-    if (users.data.length > 0) {
-      customer = users.data[0];
-    } else {
-      customer = await stripe.customers.create({ email, metadata: { uid } });
-    }
-
-    const session = await stripe.checkout.sessions.create({
-      customer: customer.id,
-      payment_method_types: ["card"],
-      mode: "subscription",
-      line_items: [{ price: priceId, quantity: 1 }],
-      subscription_data: { metadata: { uid, tier } },
-      success_url: `https://paypal-api-khmg.onrender.com/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `https://paypal-api-khmg.onrender.com/stripe/cancel`,
-    });
-
-    res.json({ checkoutUrl: session.url });
-  } catch (err) {
-    console.error("Stripe create-subscription error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res) => {
   let event;
   try {
@@ -499,6 +466,39 @@ app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res
 });
 
 app.use(bodyParser.json());
+
+// Create Stripe Subscription via Checkout session
+app.post("/api/stripe/create-subscription", async (req, res) => {
+  const { uid, email, priceId, tier } = req.body;
+  if (!uid || !email || !priceId || !tier) {
+    return res.status(400).json({ error: "Missing uid, email, priceId or tier" });
+  }
+
+  try {
+    let customer;
+    const users = await stripe.customers.list({ email, limit: 1 });
+    if (users.data.length > 0) {
+      customer = users.data[0];
+    } else {
+      customer = await stripe.customers.create({ email, metadata: { uid } });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      customer: customer.id,
+      payment_method_types: ["card"],
+      mode: "subscription",
+      line_items: [{ price: priceId, quantity: 1 }],
+      subscription_data: { metadata: { uid, tier } },
+      success_url: `https://paypal-api-khmg.onrender.com/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `https://paypal-api-khmg.onrender.com/stripe/cancel`,
+    });
+
+    res.json({ checkoutUrl: session.url });
+  } catch (err) {
+    console.error("Stripe create-subscription error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ✅ Start Express Server
 app.listen(PORT, () => {
