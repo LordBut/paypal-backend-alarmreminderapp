@@ -500,6 +500,21 @@ app.post("/api/stripe/create-subscription", async (req, res) => {
   }
 });
 
+app.get("/stripe/success", (req, res) => {
+  const sessionId = req.query.session_id;
+  console.log("✅ Stripe Checkout succeeded. Session ID:", sessionId);
+
+  // For mobile apps, redirect back to app using a deep link
+  const redirectUri = `alarmreminderapp://subscription/success?session_id=${encodeURIComponent(sessionId)}`;
+  return res.redirect(302, redirectUri);
+});
+
+app.get("/stripe/cancel", (req, res) => {
+  console.log("⚠️ Stripe Checkout was cancelled by the user.");
+  return res.redirect(302, "alarmreminderapp://subscription/cancel");
+});
+
+
 // ✅ Start Express Server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
