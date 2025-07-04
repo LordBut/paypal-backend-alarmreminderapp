@@ -465,8 +465,6 @@ app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res
   })();
 });
 
-app.use(bodyParser.json());
-
 // Create Stripe Subscription via Checkout session
 app.post("/api/stripe/create-subscription", async (req, res) => {
   const { uid, email, priceId, tier } = req.body;
@@ -514,6 +512,7 @@ app.get("/stripe/cancel", (req, res) => {
   return res.redirect(302, "alarmreminderapp://subscription/cancel");
 });
 
+app.use(bodyParser.json());
 
 // ✅ Start Express Server
 app.listen(PORT, () => {
