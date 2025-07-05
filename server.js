@@ -36,6 +36,7 @@ admin.initializeApp({
 
 const app = express();
 app.use(cors());
+app.use(bodyParser.json());
 
 // ✅ Serve assetlinks.json
 app.use(
@@ -511,8 +512,6 @@ app.get("/stripe/cancel", (req, res) => {
   console.log("⚠️ Stripe Checkout was cancelled by the user.");
   return res.redirect(302, "alarmreminderapp://subscription/cancel");
 });
-
-app.use(bodyParser.json());
 
 // ✅ Start Express Server
 app.listen(PORT, () => {
