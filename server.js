@@ -36,6 +36,81 @@ admin.initializeApp({
 
 const app = express();
 app.use(cors());
+
+// ✅ Stripe Webhook Handler (must use raw body)
+app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res) => {
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      req.headers["stripe-signature"],
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error("⚠️ Stripe webhook signature verification failed:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // ✅ Immediately acknowledge to avoid timeout
+  res.status(200).json({ received: true });
+
+  // 🔄 Handle in background
+  (async () => {
+    const db = admin.firestore();
+    const data = event.data.object;
+
+    try {
+      switch (event.type) {
+        case "checkout.session.completed": {
+          const subId = data.subscription;
+          const uid = data.metadata?.uid;
+          const tier = data.metadata?.tier;
+          const customer = data.customer;
+
+          if (uid && subId && tier) {
+            await updateSubscriptionInFirestore(uid, subId, tier, "active", "stripe", customer);
+            console.log(`✅ Stripe checkout.session.completed processed for user ${uid}`);
+          }
+          break;
+        }
+
+        case "invoice.paid":
+        case "customer.subscription.created":
+        case "customer.subscription.updated": {
+          const sub = data;
+          const uid = sub.metadata?.uid;
+          const tier = sub.metadata?.tier;
+          const status = sub.status;
+          const customer = sub.customer;
+
+          if (uid && tier && customer) {
+            await updateSubscriptionInFirestore(uid, sub.id, tier, status, "stripe", customer);
+            console.log(`✅ Stripe subscription updated: user=${uid}, status=${status}`);
+          }
+          break;
+        }
+
+        case "customer.subscription.deleted": {
+          const sub = data;
+          const uid = sub.metadata?.uid;
+
+          if (uid) {
+            await updateSubscriptionInFirestore(uid, null, "Free", "cancelled", "stripe");
+            console.log(`🔄 Stripe subscription cancelled for user ${uid}`);
+          }
+          break;
+        }
+
+        default:
+          console.log(`ℹ️ Unhandled Stripe event: ${event.type}`);
+      }
+    } catch (error) {
+      console.error("❌ Stripe webhook handling failed:", error);
+    }
+  })();
+});
+
 app.use(bodyParser.json());
 
 // ✅ Serve assetlinks.json
@@ -393,91 +468,22 @@ app.get("/api/paypal/token", async (req, res) => {
   }
 });
 
-app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res) => {
-  let event;
-  try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      req.headers["stripe-signature"],
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
-  } catch (err) {
-    console.error("⚠️ Stripe webhook signature verification failed:", err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  // ✅ Immediately acknowledge receipt to avoid timeouts
-  res.status(200).json({ received: true });
-
-  // 🔄 Process event in background
-  (async () => {
-    const db = admin.firestore();
-    const data = event.data.object;
-
-    try {
-      switch (event.type) {
-        case "checkout.session.completed": {
-          const subId = data.subscription;
-          const uid = data.metadata?.uid;
-          const tier = data.metadata?.tier;
-          const customer = data.customer;
-
-          if (uid && subId && tier) {
-            await updateSubscriptionInFirestore(uid, subId, tier, "active", "stripe", customer);
-            console.log(`✅ Stripe checkout.session.completed saved for user ${uid}`);
-          }
-          break;
-        }
-
-        case "invoice.paid":
-        case "customer.subscription.created":
-        case "customer.subscription.updated": {
-          const sub = data;
-          const uid = sub.metadata?.uid;
-          const tier = sub.metadata?.tier;
-          const status = sub.status;
-          const customer = sub.customer;
-
-          if (uid && tier && customer) {
-            await updateSubscriptionInFirestore(uid, sub.id, tier, status, "stripe", customer);
-            console.log(`✅ Stripe subscription updated: user=${uid}, status=${status}`);
-          }
-          break;
-        }
-
-        case "customer.subscription.deleted": {
-          const sub = data;
-          const uid = sub.metadata?.uid;
-
-          if (uid) {
-            await updateSubscriptionInFirestore(uid, null, "Free", "cancelled", "stripe");
-            console.log(`🔄 Stripe subscription cancelled: user=${uid}`);
-          }
-          break;
-        }
-
-        default:
-          console.log(`ℹ️ Unhandled Stripe event: ${event.type}`);
-          break;
-      }
-    } catch (error) {
-      console.error("❌ Error processing Stripe webhook:", error);
-    }
-  })();
-});
-
-// Create Stripe Subscription via Checkout session
+// ✅ Stripe Checkout Session Creation
 app.post("/api/stripe/create-subscription", async (req, res) => {
-  const { uid, email, priceId, tier } = req.body;
+  const { uid, email, priceId, tier } = req.body || {};
+  console.log("📩 Stripe subscription request body:", req.body);
+
   if (!uid || !email || !priceId || !tier) {
+    console.warn("🛑 Missing Stripe subscription parameters:", { uid, email, priceId, tier });
     return res.status(400).json({ error: "Missing uid, email, priceId or tier" });
   }
 
   try {
     let customer;
-    const users = await stripe.customers.list({ email, limit: 1 });
-    if (users.data.length > 0) {
-      customer = users.data[0];
+    const customers = await stripe.customers.list({ email, limit: 1 });
+
+    if (customers.data.length > 0) {
+      customer = customers.data[0];
     } else {
       customer = await stripe.customers.create({ email, metadata: { uid } });
     }
@@ -492,24 +498,26 @@ app.post("/api/stripe/create-subscription", async (req, res) => {
       cancel_url: `https://paypal-api-khmg.onrender.com/stripe/cancel`,
     });
 
+    console.log(`✅ Stripe session created for ${uid}: ${session.url}`);
     res.json({ checkoutUrl: session.url });
   } catch (err) {
-    console.error("Stripe create-subscription error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("❌ Stripe subscription error:", err);
+    res.status(500).json({ error: "Failed to create Stripe subscription." });
   }
 });
 
+// ✅ Stripe Checkout Success Redirect
 app.get("/stripe/success", (req, res) => {
   const sessionId = req.query.session_id;
   console.log("✅ Stripe Checkout succeeded. Session ID:", sessionId);
 
-  // For mobile apps, redirect back to app using a deep link
   const redirectUri = `alarmreminderapp://subscription/success?session_id=${encodeURIComponent(sessionId)}`;
   return res.redirect(302, redirectUri);
 });
 
+// ✅ Stripe Checkout Cancel Redirect
 app.get("/stripe/cancel", (req, res) => {
-  console.log("⚠️ Stripe Checkout was cancelled by the user.");
+  console.log("⚠️ Stripe Checkout was cancelled.");
   return res.redirect(302, "alarmreminderapp://subscription/cancel");
 });
 
