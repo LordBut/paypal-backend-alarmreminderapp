@@ -102,10 +102,23 @@ app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res
           const subId = data.subscription;
           const uid = data.metadata?.uid;
           const tier = data.metadata?.tier;
-          const customer = data.customer;
-
+          const customerId = data.customer;
+        
           if (uid && subId && tier) {
-            await updateSubscriptionInFirestore(uid, subId, tier, "active", "stripe", customer);
+            const customer = await stripe.customers.retrieve(customerId);
+            const payerEmail = customer.email;
+        
+            const conflictQuery = await admin.firestore().collection("users")
+              .where("payerEmail", "==", payerEmail)
+              .get();
+        
+            if (!conflictQuery.empty && conflictQuery.docs.some(doc => doc.id !== uid)) {
+              await stripe.subscriptions.del(subId); // Cancel the subscription
+              console.warn(`🚫 Duplicate email ${payerEmail}. Subscription ${subId} canceled.`);
+              return;
+            }
+        
+            await updateSubscriptionInFirestore(uid, subId, tier, "active", "stripe", payerEmail);
             console.log(`✅ Stripe checkout.session.completed processed for user ${uid}`);
           }
           break;
