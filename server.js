@@ -37,6 +37,42 @@ admin.initializeApp({
 const app = express();
 app.use(cors());
 
+// 🔧 Utility: Save Stripe subscription to Firestore
+async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, platform, customerId = null) {
+  const db = admin.firestore();
+  const userRef = db.collection("users").doc(uid);
+
+  const userData = {
+    subscriptionStatus: status,
+    subscription_tier: tier,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  if (platform === "stripe") {
+    userData.stripeSubscriptionId = subscriptionId;
+    userData.stripeCustomerId = customerId;
+  }
+
+  if (status === "cancelled" || !subscriptionId) {
+    userData.subscription_tier = "Free";
+    userData.stripeSubscriptionId = null;
+    userData.stripeCustomerId = null;
+  }
+
+  await userRef.set(userData, { merge: true });
+
+  await userRef.collection("subscriptions").doc("current").set({
+    tier: tier,
+    status: status,
+    platform: platform,
+    subscriptionId: subscriptionId,
+    stripeCustomerId: customerId,
+    timestamp: Date.now()
+  });
+
+  console.log(`📥 Firestore updated for user: ${uid}`);
+}
+
 // ✅ Stripe Webhook Handler (must use raw body)
 app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res) => {
   let event;
