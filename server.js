@@ -42,35 +42,32 @@ async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, 
   const db = admin.firestore();
   const userRef = db.collection("users").doc(uid);
 
+  const isActive = status === "active" && subscriptionId;
+  const normalizedTier = isActive ? tier : "Free";
+
   const userData = {
+    subscription_tier: normalizedTier,
     subscriptionStatus: status,
-    subscription_tier: tier,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 
   if (platform === "stripe") {
-    userData.stripeSubscriptionId = subscriptionId;
-    userData.stripeCustomerId = customerId;
-  }
-
-  if (status === "cancelled" || !subscriptionId) {
-    userData.subscription_tier = "Free";
-    userData.stripeSubscriptionId = null;
-    userData.stripeCustomerId = null;
+    userData.stripeSubscriptionId = subscriptionId || null;
+    userData.stripeCustomerId = customerId || null;
   }
 
   await userRef.set(userData, { merge: true });
 
   await userRef.collection("subscriptions").doc("current").set({
-    tier: tier,
+    tier: normalizedTier,
     status: status,
     platform: platform,
-    subscriptionId: subscriptionId,
-    stripeCustomerId: customerId,
+    subscriptionId: subscriptionId || null,
+    stripeCustomerId: customerId || null,
     timestamp: Date.now()
   });
 
-  console.log(`📥 Firestore updated for user: ${uid}`);
+  console.log(`📥 Firestore updated for user: ${uid} | Tier: ${normalizedTier}`);
 }
 
 // ✅ Stripe Webhook Handler (must use raw body)
@@ -103,21 +100,21 @@ app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res
           const uid = data.metadata?.uid;
           const tier = data.metadata?.tier;
           const customerId = data.customer;
-        
+
           if (uid && subId && tier) {
             const customer = await stripe.customers.retrieve(customerId);
             const payerEmail = customer.email;
-        
+
             const conflictQuery = await admin.firestore().collection("users")
               .where("payerEmail", "==", payerEmail)
               .get();
-        
+
             if (!conflictQuery.empty && conflictQuery.docs.some(doc => doc.id !== uid)) {
               await stripe.subscriptions.del(subId); // Cancel the subscription
               console.warn(`🚫 Duplicate email ${payerEmail}. Subscription ${subId} canceled.`);
               return;
             }
-        
+
             await updateSubscriptionInFirestore(uid, subId, tier, "active", "stripe", payerEmail);
             console.log(`✅ Stripe checkout.session.completed processed for user ${uid}`);
           }
