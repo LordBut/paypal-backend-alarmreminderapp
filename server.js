@@ -567,6 +567,27 @@ app.get("/stripe/cancel", (req, res) => {
   return res.redirect(302, "alarmreminderapp://subscription/cancel");
 });
 
+// 🔍 Retrieve Stripe subscription status (used by Android client)
+app.get("/api/stripe/subscription/:subscriptionId", async (req, res) => {
+  const { subscriptionId } = req.params;
+  if (!subscriptionId) {
+    return res.status(400).json({ error: "Missing subscriptionId" });
+  }
+
+  try {
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    res.json({
+      id: subscription.id,
+      status: subscription.status,
+      metadata: subscription.metadata || {},
+      current_period_end: subscription.current_period_end
+    });
+  } catch (error) {
+    console.error("❌ Failed to fetch Stripe subscription:", error);
+    res.status(500).json({ error: "Could not fetch subscription details" });
+  }
+});
+
 // ✅ Start Express Server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
