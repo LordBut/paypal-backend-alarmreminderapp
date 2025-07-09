@@ -144,27 +144,29 @@ app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res
           }
           break;
         }
-
+        
+        case "invoice.payment_failed": {
+              const sub = data.subscription;
+              const customer = data.customer;
+        
+              const subscription = await stripe.subscriptions.retrieve(sub);
+              const uid = subscription.metadata?.uid;
+              const tier = subscription.metadata?.tier;
+        
+              if (uid && tier && sub) {
+                await updateSubscriptionInFirestore(uid, sub, tier, "payment_failed", "stripe", customer);
+                console.log(`❌ Stripe payment failed: user=${uid}`);
+              }
+              break;
+            }
+            
         default:
           console.log(`ℹ️ Unhandled Stripe event: ${event.type}`);
       }
     } catch (error) {
       console.error("❌ Stripe webhook handling failed:", error);
     }
-    case "invoice.payment_failed": {
-      const sub = data.subscription;
-      const customer = data.customer;
-
-      const subscription = await stripe.subscriptions.retrieve(sub);
-      const uid = subscription.metadata?.uid;
-      const tier = subscription.metadata?.tier;
-
-      if (uid && tier && sub) {
-        await updateSubscriptionInFirestore(uid, sub, tier, "payment_failed", "stripe", customer);
-        console.log(`❌ Stripe payment failed: user=${uid}`);
-      }
-      break;
-    }
+   
   })();
 });
 
