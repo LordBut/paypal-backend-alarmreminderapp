@@ -38,10 +38,9 @@ const app = express();
 app.use(cors());
 
 // 🔧 Utility: Save Stripe subscription to Firestore
-async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, platform, customerId = null) {
+async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, platform, customerIdentifier = null) {
   const db = admin.firestore();
   const userRef = db.collection("users").doc(uid);
-
   const isActive = status === "active" && subscriptionId;
   const normalizedTier = isActive ? tier : "Free";
 
@@ -53,20 +52,18 @@ async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, 
 
   if (platform === "stripe") {
     userData.stripeSubscriptionId = subscriptionId || null;
-    userData.stripeCustomerId = customerId || null;
+    userData.payerEmail = customerIdentifier || null;
   }
 
   await userRef.set(userData, { merge: true });
-
   await userRef.collection("subscriptions").doc("current").set({
     tier: normalizedTier,
     status: status,
-    platform: platform,
+    platform,
     subscriptionId: subscriptionId || null,
-    stripeCustomerId: customerId || null,
+    payerEmail: customerIdentifier || null,
     timestamp: Date.now()
   });
-
   console.log(`📥 Firestore updated for user: ${uid} | Tier: ${normalizedTier}`);
 }
 
@@ -110,8 +107,8 @@ app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res
               .get();
 
             if (!conflictQuery.empty && conflictQuery.docs.some(doc => doc.id !== uid)) {
-              await stripe.subscriptions.del(subId); // Cancel the subscription
-              console.warn(`🚫 Duplicate email ${payerEmail}. Subscription ${subId} canceled.`);
+              await stripe.subscriptions.del(subId); // cancel duplicate subscription
+              console.warn(`🚫 Duplicate email ${payerEmail}. Subscription ${subId} cancelled.`);
               return;
             }
 
@@ -153,6 +150,20 @@ app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res
       }
     } catch (error) {
       console.error("❌ Stripe webhook handling failed:", error);
+    }
+    case "invoice.payment_failed": {
+      const sub = data.subscription;
+      const customer = data.customer;
+
+      const subscription = await stripe.subscriptions.retrieve(sub);
+      const uid = subscription.metadata?.uid;
+      const tier = subscription.metadata?.tier;
+
+      if (uid && tier && sub) {
+        await updateSubscriptionInFirestore(uid, sub, tier, "payment_failed", "stripe", customer);
+        console.log(`❌ Stripe payment failed: user=${uid}`);
+      }
+      break;
     }
   })();
 });
