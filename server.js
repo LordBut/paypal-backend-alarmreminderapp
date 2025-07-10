@@ -144,29 +144,29 @@ app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res
           }
           break;
         }
-        
+
         case "invoice.payment_failed": {
               const sub = data.subscription;
               const customer = data.customer;
-        
+
               const subscription = await stripe.subscriptions.retrieve(sub);
               const uid = subscription.metadata?.uid;
               const tier = subscription.metadata?.tier;
-        
+
               if (uid && tier && sub) {
                 await updateSubscriptionInFirestore(uid, sub, tier, "payment_failed", "stripe", customer);
                 console.log(`❌ Stripe payment failed: user=${uid}`);
               }
               break;
             }
-            
+
         default:
           console.log(`ℹ️ Unhandled Stripe event: ${event.type}`);
       }
     } catch (error) {
       console.error("❌ Stripe webhook handling failed:", error);
     }
-   
+
   })();
 });
 
@@ -552,10 +552,12 @@ app.post("/api/stripe/create-subscription", async (req, res) => {
       payment_method_types: ["card"],
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
+      automatic_tax: { enabled: true }, // ✅ This enables Stripe Automatic Tax
       subscription_data: { metadata: { uid, tier } },
       success_url: `https://paypal-api-khmg.onrender.com/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `https://paypal-api-khmg.onrender.com/stripe/cancel`,
     });
+
 
     console.log(`✅ Stripe session created for ${uid}: ${session.url}`);
     res.json({ checkoutUrl: session.url });
