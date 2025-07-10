@@ -552,12 +552,15 @@ app.post("/api/stripe/create-subscription", async (req, res) => {
       payment_method_types: ["card"],
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
-      automatic_tax: { enabled: true }, // ✅ This enables Stripe Automatic Tax
+      automatic_tax: { enabled: true }, // ✅ enables automatic tax
+      billing_address_collection: "required", // ✅ collects address in Checkout
+      customer_update: {
+        address: "auto", // ✅ saves the collected billing address to the customer
+      },
       subscription_data: { metadata: { uid, tier } },
       success_url: `https://paypal-api-khmg.onrender.com/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `https://paypal-api-khmg.onrender.com/stripe/cancel`,
     });
-
 
     console.log(`✅ Stripe session created for ${uid}: ${session.url}`);
     res.json({ checkoutUrl: session.url });
