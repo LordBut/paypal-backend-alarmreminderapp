@@ -53,6 +53,8 @@ async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, 
   if (platform === "stripe") {
     userData.stripeSubscriptionId = subscriptionId || null;
     userData.payerEmail = customerIdentifier || null;
+    userData.platform = "stripe";
+    userData.provider = "stripe";
   }
 
   await userRef.set(userData, { merge: true });
