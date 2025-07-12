@@ -588,8 +588,9 @@ app.get("/stripe/cancel", (req, res) => {
 // 🔍 Retrieve Stripe subscription status (used by Android client)
 app.get("/api/stripe/subscription/:subscriptionId", async (req, res) => {
   const { subscriptionId } = req.params;
-  if (!subscriptionId) {
-    return res.status(400).json({ error: "Missing subscriptionId" });
+
+  if (!subscriptionId || !subscriptionId.startsWith("sub_")) {
+    return res.status(400).json({ error: "Invalid or missing subscriptionId" });
   }
 
   try {
@@ -601,6 +602,10 @@ app.get("/api/stripe/subscription/:subscriptionId", async (req, res) => {
       current_period_end: subscription.current_period_end
     });
   } catch (error) {
+    if (error.code === "resource_missing") {
+      console.warn(`⚠️ Stripe subscription not found: ${subscriptionId}`);
+      return res.status(404).json({ error: "Subscription not found in Stripe" });
+    }
     console.error("❌ Failed to fetch Stripe subscription:", error);
     res.status(500).json({ error: "Could not fetch subscription details" });
   }
