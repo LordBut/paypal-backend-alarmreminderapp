@@ -39,35 +39,32 @@ app.use(cors());
 
 // 🔧 Utility: Save Stripe subscription to Firestore
 async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, platform, customerIdentifier = null) {
-  const db = admin.firestore();
-  const userRef = db.collection("users").doc(uid);
+  const userRef = admin.firestore().collection("users").doc(uid);
   const isActive = status === "active" && subscriptionId;
   const normalizedTier = isActive ? tier : "Free";
-
   const userData = {
     subscription_tier: normalizedTier,
     subscriptionStatus: status,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
-
   if (platform === "stripe") {
     userData.stripeSubscriptionId = subscriptionId || null;
     userData.payerEmail = customerIdentifier || null;
     userData.platform = "stripe";
     userData.provider = "stripe";
   }
-
   await userRef.set(userData, { merge: true });
   await userRef.collection("subscriptions").doc("current").set({
     tier: normalizedTier,
     status: status,
-    platform,
+    platform: platform,
+    provider: platform,
     subscriptionId: subscriptionId || null,
     payerEmail: customerIdentifier || null,
     timestamp: Date.now()
   });
-  console.log(`📥 Firestore updated for user: ${uid} | Tier: ${normalizedTier}`);
 }
+
 
 // ✅ Stripe Webhook Handler (must use raw body)
 app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res) => {
@@ -550,19 +547,17 @@ app.post("/api/stripe/create-subscription", async (req, res) => {
     }
 
     const session = await stripe.checkout.sessions.create({
-      customer: customer.id,
-      payment_method_types: ["card"],
-      mode: "subscription",
-      line_items: [{ price: priceId, quantity: 1 }],
-      automatic_tax: { enabled: true }, // ✅ enables automatic tax
-      billing_address_collection: "required", // ✅ collects address in Checkout
-      customer_update: {
-        address: "auto", // ✅ saves the collected billing address to the customer
-      },
-      subscription_data: { metadata: { uid, tier } },
-      success_url: `https://paypal-api-khmg.onrender.com/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `https://paypal-api-khmg.onrender.com/stripe/cancel`,
-    });
+        customer: customer.id,
+        payment_method_types: ["card"],
+        mode: "subscription",
+        line_items: [{ price: priceId, quantity: 1 }],
+        automatic_tax: { enabled: true },
+        billing_address_collection: "required",
+        customer_update: { address: "auto" },
+        subscription_data: { metadata: { uid, tier } },
+        success_url: `https://paypal-api-khmg.onrender.com/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `https://paypal-api-khmg.onrender.com/stripe/cancel`,
+      });
 
     console.log(`✅ Stripe session created for ${uid}: ${session.url}`);
     res.json({ checkoutUrl: session.url });
@@ -590,11 +585,9 @@ app.get("/stripe/cancel", (req, res) => {
 // 🔍 Retrieve Stripe subscription status (used by Android client)
 app.get("/api/stripe/subscription/:subscriptionId", async (req, res) => {
   const { subscriptionId } = req.params;
-
   if (!subscriptionId || !subscriptionId.startsWith("sub_")) {
     return res.status(400).json({ error: "Invalid or missing subscriptionId" });
   }
-
   try {
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
     res.json({
@@ -605,7 +598,6 @@ app.get("/api/stripe/subscription/:subscriptionId", async (req, res) => {
     });
   } catch (error) {
     if (error.code === "resource_missing") {
-      console.warn(`⚠️ Stripe subscription not found: ${subscriptionId}`);
       return res.status(404).json({ error: "Subscription not found in Stripe" });
     }
     console.error("❌ Failed to fetch Stripe subscription:", error);
