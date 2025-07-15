@@ -577,21 +577,21 @@ app.get("/stripe/success", (req, res) => {
 });
 
 // ✅ Stripe Checkout Cancel Redirect
-// 🧹 Cancel a Stripe subscription
-app.post("/api/stripe/subscription/:subscriptionId/cancel", async (req, res) => {
+// 🧹 Cancel a Stripe subscriptionapp.post("/api/stripe/subscription/:subscriptionId/cancel", async (req, res) => {
   const { subscriptionId } = req.params;
   if (!subscriptionId || !subscriptionId.startsWith("sub_")) {
     return res.status(400).json({ error: "Invalid or missing subscriptionId" });
   }
   try {
-    await stripe.subscriptions.del(subscriptionId);
-    console.log(`✅ Stripe subscription ${subscriptionId} canceled.`);
+    const deleted = await stripe.subscriptions.del(subscriptionId, { prorate: false });
+    console.log(`✅ Stripe subscription ${subscriptionId} canceled, status: ${deleted.status}`);
     return res.sendStatus(204);
   } catch (err) {
-    console.error(`❌ Failed to cancel Stripe subscription ${subscriptionId}:`, err.message);
+    console.error(`❌ Failed to cancel Stripe subscription ${subscriptionId}:`, err);
     return res.status(500).json({ error: "Failed to cancel subscription." });
   }
 });
+
 
 // 🔍 Retrieve Stripe subscription status (used by Android client)
 app.get("/api/stripe/subscription/:subscriptionId", async (req, res) => {
