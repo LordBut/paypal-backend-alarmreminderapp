@@ -5,6 +5,7 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const admin = require("firebase-admin");
 const path = require("path");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config();
@@ -35,6 +36,139 @@ admin.initializeApp({
 
 const app = express();
 app.use(cors());
+
+// 🔧 Utility: Save Stripe subscription to Firestore
+async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, platform, customerIdentifier = null) {
+  const userRef = admin.firestore().collection("users").doc(uid);
+  const isActive = status === "active" && subscriptionId;
+  const normalizedTier = isActive ? tier : "Free";
+  const userData = {
+    subscription_tier: normalizedTier,
+    subscriptionStatus: status,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  if (platform === "stripe") {
+    userData.stripeSubscriptionId = subscriptionId || null;
+    userData.payerEmail = customerIdentifier || null;
+    userData.platform = "stripe";
+    userData.provider = "stripe";
+  }
+  await userRef.set(userData, { merge: true });
+  await userRef.collection("subscriptions").doc("current").set({
+    tier: normalizedTier,
+    status: status,
+    platform: platform,
+    provider: platform,
+    subscriptionId: subscriptionId || null,
+    payerEmail: customerIdentifier || null,
+    timestamp: Date.now()
+  });
+}
+
+
+// ✅ Stripe Webhook Handler (must use raw body)
+app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res) => {
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      req.headers["stripe-signature"],
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error("⚠️ Stripe webhook signature verification failed:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // ✅ Immediately acknowledge to avoid timeout
+  res.status(200).json({ received: true });
+
+  // 🔄 Handle in background
+  (async () => {
+    const db = admin.firestore();
+    const data = event.data.object;
+
+    try {
+      switch (event.type) {
+        case "checkout.session.completed": {
+          const subId = data.subscription;
+          const uid = data.metadata?.uid;
+          const tier = data.metadata?.tier;
+          const customerId = data.customer;
+
+          if (uid && subId && tier) {
+            const customer = await stripe.customers.retrieve(customerId);
+            const payerEmail = customer.email;
+
+            const conflictQuery = await admin.firestore().collection("users")
+              .where("payerEmail", "==", payerEmail)
+              .get();
+
+            if (!conflictQuery.empty && conflictQuery.docs.some(doc => doc.id !== uid)) {
+              await stripe.subscriptions.del(subId); // cancel duplicate subscription
+              console.warn(`🚫 Duplicate email ${payerEmail}. Subscription ${subId} cancelled.`);
+              return;
+            }
+
+            await updateSubscriptionInFirestore(uid, subId, tier, "active", "stripe", payerEmail);
+            console.log(`✅ Stripe checkout.session.completed processed for user ${uid}`);
+          }
+          break;
+        }
+
+        case "invoice.paid":
+        case "customer.subscription.created":
+        case "customer.subscription.updated": {
+          const sub = data;
+          const uid = sub.metadata?.uid;
+          const tier = sub.metadata?.tier;
+          const status = sub.status;
+          const customer = sub.customer;
+
+          if (uid && tier && customer) {
+            await updateSubscriptionInFirestore(uid, sub.id, tier, status, "stripe", customer);
+            console.log(`✅ Stripe subscription updated: user=${uid}, status=${status}`);
+          }
+          break;
+        }
+
+        case "customer.subscription.deleted": {
+          const sub = data;
+          const uid = sub.metadata?.uid;
+
+          if (uid) {
+            await updateSubscriptionInFirestore(uid, null, "Free", "cancelled", "stripe");
+            console.log(`🔄 Stripe subscription cancelled for user ${uid}`);
+          }
+          break;
+        }
+
+        case "invoice.payment_failed": {
+              const sub = data.subscription;
+              const customer = data.customer;
+
+              const subscription = await stripe.subscriptions.retrieve(sub);
+              const uid = subscription.metadata?.uid;
+              const tier = subscription.metadata?.tier;
+
+              if (uid && tier && sub) {
+                await updateSubscriptionInFirestore(uid, sub, tier, "payment_failed", "stripe", customer);
+                console.log(`❌ Stripe payment failed: user=${uid}`);
+              }
+              break;
+            }
+
+        default:
+          console.log(`ℹ️ Unhandled Stripe event: ${event.type}`);
+      }
+    } catch (error) {
+      console.error("❌ Stripe webhook handling failed:", error);
+    }
+
+  })();
+});
+
 app.use(bodyParser.json());
 
 // ✅ Serve assetlinks.json
@@ -244,9 +378,8 @@ app.post("/paypal/webhook", async (req, res) => {
   try {
     const { event_type, resource } = req.body;
 
-    // Log the entire webhook payload for debugging
+    // 🧾 Log entire payload for debugging
     console.log("📬 Full webhook payload:", JSON.stringify(req.body, null, 2));
-
     if (!event_type || !resource || !resource.id) {
       console.warn("⚠️ Incomplete webhook payload.");
       return res.sendStatus(200);
@@ -255,81 +388,114 @@ app.post("/paypal/webhook", async (req, res) => {
     const subscriptionId = resource.id;
     const planId = resource.plan_id || "N/A";
     const userId = resource.custom_id || "N/A";
+    const payerEmail = resource?.subscriber?.email_address;
 
     console.log(`📬 Webhook received: ${event_type}`);
     console.log(`🔍 Subscription ID: ${subscriptionId}`);
     console.log(`🔍 Plan ID: ${planId}`);
     console.log(`🔍 User ID: ${userId}`);
+    console.log(`🔍 Payer Email: ${payerEmail}`);
 
-    const userRef =
-      userId !== "N/A"
-        ? admin.firestore().collection("users").doc(userId)
-        : null;
+    const db = admin.firestore();
+    const userRef = userId !== "N/A" ? db.collection("users").doc(userId) : null;
 
     switch (event_type) {
       case "BILLING.SUBSCRIPTION.ACTIVATED":
-        if (userRef) {
-          await userRef.set(
-            {
-              subscriptionId,
-              planId,
-              subscriptionStatus: "active",
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
-          console.log(`✅ Subscription activated for user: ${userId}`);
+        if (payerEmail && userRef) {
+          // 🛑 Prevent duplicate PayPal email across accounts
+          const existingUsers = await db.collection("users")
+            .where("payerEmail", "==", payerEmail)
+            .get();
+
+          const conflict = existingUsers.docs.find(doc => doc.id !== userId);
+          if (conflict) {
+            console.warn(`🚫 PayPal email ${payerEmail} already used by user ${conflict.id}. Canceling subscription ${subscriptionId}.`);
+
+            const token = await getPayPalAccessToken();
+            await axios.post(
+              `${PAYPAL_API}/v1/billing/subscriptions/${subscriptionId}/cancel`,
+              { reason: "Duplicate PayPal email used by another account." },
+              {
+                headers: {
+                  "Authorization": `Bearer ${token}`,
+                  "Content-Type": "application/json"
+                }
+              }
+            );
+
+            return res.sendStatus(200);
+          }
+
+          // ✅ No conflict, save subscription
+          const tier = planId.includes("GM") ? "Grandmaster" : "Champ";
+          await userRef.set({
+            subscriptionId,
+            planId,
+            subscriptionStatus: "active",
+            payerEmail,
+            subscription_tier: tier,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+
+          await userRef.collection("subscriptions").doc("current").set({
+            status: "active",
+            tier,
+            planId,
+            subscriptionId,
+            payerEmail,
+            timestamp: Date.now()
+          });
+
+          console.log(`✅ Subscription activated and saved for user: ${userId}`);
         }
         break;
 
       case "BILLING.SUBSCRIPTION.CANCELLED":
         if (userRef) {
-          await userRef.set(
-            {
-              subscriptionStatus: "cancelled",
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
+          await userRef.set({
+            subscriptionStatus: "cancelled",
+            subscription_tier: "Free",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+
+          await userRef.collection("subscriptions").doc("current").set({
+            status: "cancelled",
+            tier: "Free",
+            planId: null,
+            subscriptionId: null,
+            timestamp: Date.now()
+          });
+
           console.log(`🔄 Subscription cancelled for user: ${userId}`);
         }
         break;
 
       case "BILLING.SUBSCRIPTION.SUSPENDED":
         if (userRef) {
-          await userRef.set(
-            {
-              subscriptionStatus: "suspended",
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
+          await userRef.set({
+            subscriptionStatus: "suspended",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
           console.log(`⏸️ Subscription suspended for user: ${userId}`);
         }
         break;
 
       case "BILLING.SUBSCRIPTION.EXPIRED":
         if (userRef) {
-          await userRef.set(
-            {
-              subscriptionStatus: "expired",
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
+          await userRef.set({
+            subscriptionStatus: "expired",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
           console.log(`⌛ Subscription expired for user: ${userId}`);
         }
         break;
 
       case "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
         if (userRef) {
-          await userRef.set(
-            {
-              subscriptionStatus: "payment_failed",
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
+          await userRef.set({
+            subscriptionStatus: "payment_failed",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
           console.log(`❌ Payment failed for user: ${userId}`);
         }
         break;
@@ -357,6 +523,95 @@ app.get("/api/paypal/token", async (req, res) => {
   } catch (error) {
     console.error("❌ Failed to retrieve PayPal token:", error.message);
     res.status(500).json({ error: "Failed to retrieve PayPal token" });
+  }
+});
+
+// ✅ Stripe Checkout Session Creation
+app.post("/api/stripe/create-subscription", async (req, res) => {
+  const { uid, email, priceId, tier } = req.body || {};
+  console.log("📩 Stripe subscription request body:", req.body);
+
+  if (!uid || !email || !priceId || !tier) {
+    console.warn("🛑 Missing Stripe subscription parameters:", { uid, email, priceId, tier });
+    return res.status(400).json({ error: "Missing uid, email, priceId or tier" });
+  }
+
+  try {
+    let customer;
+    const customers = await stripe.customers.list({ email, limit: 1 });
+
+    if (customers.data.length > 0) {
+      customer = customers.data[0];
+    } else {
+      customer = await stripe.customers.create({ email, metadata: { uid } });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+        customer: customer.id,
+        payment_method_types: ["card"],
+        mode: "subscription",
+        line_items: [{ price: priceId, quantity: 1 }],
+        automatic_tax: { enabled: true },
+        billing_address_collection: "required",
+        customer_update: { address: "auto" },
+        subscription_data: { metadata: { uid, tier } },
+        success_url: `https://paypal-api-khmg.onrender.com/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `https://paypal-api-khmg.onrender.com/stripe/cancel`,
+      });
+
+    console.log(`✅ Stripe session created for ${uid}: ${session.url}`);
+    res.json({ checkoutUrl: session.url });
+  } catch (err) {
+    console.error("❌ Stripe subscription error:", err);
+    res.status(500).json({ error: "Failed to create Stripe subscription." });
+  }
+});
+
+// ✅ Stripe Checkout Success Redirect
+app.get("/stripe/success", (req, res) => {
+  const sessionId = req.query.session_id;
+  console.log("✅ Stripe Checkout succeeded. Session ID:", sessionId);
+
+  const redirectUri = `alarmreminderapp://subscription/success?session_id=${encodeURIComponent(sessionId)}`;
+  return res.redirect(302, redirectUri);
+});
+
+// ✅ Stripe Checkout Cancel Redirect
+app.post("/api/stripe/subscription/:subscriptionId/cancel", async (req, res) => {
+  const { subscriptionId } = req.params;
+  if (!subscriptionId || !subscriptionId.startsWith("sub_")) {
+    return res.status(400).json({ error: "Invalid or missing subscriptionId" });
+  }
+  try {
+    const deleted = await stripe.subscriptions.del(subscriptionId, { prorate: false });
+    console.log(`✅ Stripe subscription ${subscriptionId} canceled, status: ${deleted.status}`);
+    return res.sendStatus(204);
+  } catch (err) {
+    console.error(`❌ Failed to cancel Stripe subscription ${subscriptionId}:`, err);
+    return res.status(500).json({ error: "Failed to cancel subscription." });
+  }
+});
+
+// 🔍 Retrieve Stripe subscription status (used by Android client)
+app.get("/api/stripe/subscription/:subscriptionId", async (req, res) => {
+  const { subscriptionId } = req.params;
+  if (!subscriptionId || !subscriptionId.startsWith("sub_")) {
+    return res.status(400).json({ error: "Invalid or missing subscriptionId" });
+  }
+  try {
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    res.json({
+      id: subscription.id,
+      status: subscription.status,
+      metadata: subscription.metadata || {},
+      current_period_end: subscription.current_period_end
+    });
+  } catch (error) {
+    if (error.code === "resource_missing") {
+      return res.status(404).json({ error: "Subscription not found in Stripe" });
+    }
+    console.error("❌ Failed to fetch Stripe subscription:", error);
+    res.status(500).json({ error: "Could not fetch subscription details" });
   }
 });
 
