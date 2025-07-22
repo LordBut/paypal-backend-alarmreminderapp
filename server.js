@@ -42,18 +42,31 @@ async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, 
   const userRef = admin.firestore().collection("users").doc(uid);
   const isActive = status === "active" && subscriptionId;
   const normalizedTier = isActive ? tier : "Free";
+
   const userData = {
     subscription_tier: normalizedTier,
     subscriptionStatus: status,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
+
   if (platform === "stripe") {
     userData.stripeSubscriptionId = subscriptionId || null;
     userData.payerEmail = customerIdentifier || null;
     userData.platform = "stripe";
     userData.provider = "stripe";
   }
+
+  // 🟢 Set credits appropriately for premium tiers
+  if (normalizedTier.toLowerCase() === "grandmaster") {
+    userData.credits = -1; // -1 indicates unlimited in app logic
+  } else if (normalizedTier.toLowerCase() === "champ") {
+    userData.credits = 50; // Example: allocate fixed credits for Champ
+  } else {
+    userData.credits = 0;
+  }
+
   await userRef.set(userData, { merge: true });
+
   await userRef.collection("subscriptions").doc("current").set({
     tier: normalizedTier,
     status: status,
@@ -64,7 +77,6 @@ async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, 
     timestamp: Date.now()
   });
 }
-
 
 // ✅ Stripe Webhook Handler (must use raw body)
 app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res) => {
