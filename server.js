@@ -627,6 +627,45 @@ app.get("/api/stripe/subscription/:subscriptionId", async (req, res) => {
   }
 });
 
+// 🔍 GET: Fetch Stripe subscriptions by customer email
+app.get("/api/stripe/subscriptions/by-email", async (req, res) => {
+  const { email } = req.query;
+
+  if (!email) {
+    return res.status(400).json({ error: "Missing email parameter" });
+  }
+
+  try {
+    const customers = await stripe.customers.list({ email, limit: 1 });
+    if (!customers.data.length) {
+      return res.status(404).json({ error: "No customer found with this email" });
+    }
+
+    const customerId = customers.data[0].id;
+
+    const subscriptions = await stripe.subscriptions.list({
+      customer: customerId,
+      status: "all", // fetch all to check if any are still valid
+      expand: ["data.latest_invoice"]
+    });
+
+    const result = subscriptions.data.map((sub) => ({
+      id: sub.id,
+      status: sub.status,
+      metadata: sub.metadata || {},
+      latest_invoice: {
+        status: sub.latest_invoice?.status || null,
+        paid: sub.latest_invoice?.paid || false
+      }
+    }));
+
+    res.json(result);
+  } catch (err) {
+    console.error("❌ Failed to get subscriptions by email:", err);
+    res.status(500).json({ error: "Failed to retrieve subscriptions" });
+  }
+});
+
 // ✅ Start Express Server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
