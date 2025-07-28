@@ -58,11 +58,11 @@ async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, 
 
   // 🟢 Set credits appropriately for premium tiers
   if (normalizedTier.toLowerCase() === "grandmaster") {
-    userData.credits = -1; // -1 indicates unlimited in app logic
+    userData.credits = 100; // -1 indicates unlimited in app logic
   } else if (normalizedTier.toLowerCase() === "champ") {
-    userData.credits = 50; // Example: allocate fixed credits for Champ
+    userData.credits = 10; // Example: allocate fixed credits for Champ
   } else {
-    userData.credits = 0;
+    userData.credits = 2;
   }
 
   await userRef.set(userData, { merge: true });
