@@ -631,23 +631,32 @@ app.get("/api/stripe/subscription/:subscriptionId", async (req, res) => {
 app.get("/api/stripe/subscriptions/by-email", async (req, res) => {
   const { email } = req.query;
 
+  console.log("📩 Incoming request to /api/stripe/subscriptions/by-email");
   if (!email) {
+    console.warn("⚠️ Missing 'email' query parameter.");
     return res.status(400).json({ error: "Missing email parameter" });
   }
 
+  console.log(`🔍 Searching for Stripe customer with email: ${email}`);
+
   try {
     const customers = await stripe.customers.list({ email, limit: 1 });
+
     if (!customers.data.length) {
+      console.warn(`⚠️ No Stripe customer found for email: ${email}`);
       return res.status(404).json({ error: "No customer found with this email" });
     }
 
     const customerId = customers.data[0].id;
+    console.log(`✅ Found Stripe customer ID: ${customerId}`);
 
     const subscriptions = await stripe.subscriptions.list({
       customer: customerId,
-      status: "all", // fetch all to check if any are still valid
+      status: "all",
       expand: ["data.latest_invoice"]
     });
+
+    console.log(`📦 Found ${subscriptions.data.length} subscriptions for customer ${customerId}`);
 
     const result = subscriptions.data.map((sub) => ({
       id: sub.id,
@@ -659,6 +668,7 @@ app.get("/api/stripe/subscriptions/by-email", async (req, res) => {
       }
     }));
 
+    console.log("✅ Subscription details prepared. Sending response.");
     res.json(result);
   } catch (err) {
     console.error("❌ Failed to get subscriptions by email:", err);
