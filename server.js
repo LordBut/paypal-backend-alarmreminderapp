@@ -42,18 +42,31 @@ async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, 
   const userRef = admin.firestore().collection("users").doc(uid);
   const isActive = status === "active" && subscriptionId;
   const normalizedTier = isActive ? tier : "Free";
+
   const userData = {
     subscription_tier: normalizedTier,
     subscriptionStatus: status,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
+
   if (platform === "stripe") {
     userData.stripeSubscriptionId = subscriptionId || null;
     userData.payerEmail = customerIdentifier || null;
     userData.platform = "stripe";
     userData.provider = "stripe";
   }
+
+  // 🟢 Set credits appropriately for premium tiers
+  if (normalizedTier.toLowerCase() === "grandmaster") {
+    userData.credits = 100; // -1 indicates unlimited in app logic
+  } else if (normalizedTier.toLowerCase() === "champ") {
+    userData.credits = 10; // Example: allocate fixed credits for Champ
+  } else {
+    userData.credits = 2;
+  }
+
   await userRef.set(userData, { merge: true });
+
   await userRef.collection("subscriptions").doc("current").set({
     tier: normalizedTier,
     status: status,
@@ -64,7 +77,6 @@ async function updateSubscriptionInFirestore(uid, subscriptionId, tier, status, 
     timestamp: Date.now()
   });
 }
-
 
 // ✅ Stripe Webhook Handler (must use raw body)
 app.post("/webhook/stripe", express.raw({ type: "application/json" }), (req, res) => {
@@ -612,6 +624,55 @@ app.get("/api/stripe/subscription/:subscriptionId", async (req, res) => {
     }
     console.error("❌ Failed to fetch Stripe subscription:", error);
     res.status(500).json({ error: "Could not fetch subscription details" });
+  }
+});
+
+// 🔍 GET: Fetch Stripe subscriptions by customer email
+app.get("/api/stripe/subscriptions/by-email", async (req, res) => {
+  const { email } = req.query;
+
+  console.log("📩 Incoming request to /api/stripe/subscriptions/by-email");
+  if (!email) {
+    console.warn("⚠️ Missing 'email' query parameter.");
+    return res.status(400).json({ error: "Missing email parameter" });
+  }
+
+  console.log(`🔍 Searching for Stripe customer with email: ${email}`);
+
+  try {
+    const customers = await stripe.customers.list({ email, limit: 1 });
+
+    if (!customers.data.length) {
+      console.warn(`⚠️ No Stripe customer found for email: ${email}`);
+      return res.status(404).json({ error: "No customer found with this email" });
+    }
+
+    const customerId = customers.data[0].id;
+    console.log(`✅ Found Stripe customer ID: ${customerId}`);
+
+    const subscriptions = await stripe.subscriptions.list({
+      customer: customerId,
+      status: "all",
+      expand: ["data.latest_invoice"]
+    });
+
+    console.log(`📦 Found ${subscriptions.data.length} subscriptions for customer ${customerId}`);
+
+    const result = subscriptions.data.map((sub) => ({
+      id: sub.id,
+      status: sub.status,
+      metadata: sub.metadata || {},
+      latest_invoice: {
+        status: sub.latest_invoice?.status || null,
+        paid: sub.latest_invoice?.paid || false
+      }
+    }));
+
+    console.log("✅ Subscription details prepared. Sending response.");
+    res.json(result);
+  } catch (err) {
+    console.error("❌ Failed to get subscriptions by email:", err);
+    res.status(500).json({ error: "Failed to retrieve subscriptions" });
   }
 });
 
