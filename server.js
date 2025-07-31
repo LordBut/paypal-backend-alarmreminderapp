@@ -508,7 +508,26 @@ app.post("/paypal/webhook", async (req, res) => {
             subscriptionStatus: "payment_failed",
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
           }, { merge: true });
+
           console.log(`❌ Payment failed for user: ${userId}`);
+
+          // 🔁 Automatically cancel after failure
+          try {
+            const token = await getPayPalAccessToken();
+            await axios.post(
+              `${PAYPAL_API}/v1/billing/subscriptions/${subscriptionId}/cancel`,
+              { reason: "Auto-cancelled after failed payment" },
+              {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json"
+                }
+              }
+            );
+            console.log(`🛑 Auto-cancelled PayPal subscription ${subscriptionId} after payment failure`);
+          } catch (err) {
+            console.error("❌ Failed to auto-cancel PayPal subscription:", err.message);
+          }
         }
         break;
 
