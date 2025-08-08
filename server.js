@@ -18,7 +18,7 @@ const {
   FIREBASE_PRIVATE_KEY,
   PAYPAL_CLIENT_ID,
   PAYPAL_SECRET,
-  PAYPAL_API = "https://api-m.sandbox.paypal.com",
+  PAYPAL_API = "https://api-m.paypal.com",
   PORT = 3000,
 } = process.env;
 
