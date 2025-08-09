@@ -354,8 +354,8 @@ app.get("/", (req, res) => {
 
 // Define valid plan IDs
 const validPlanIds = {
-  "Champ": "P-86R0994779441710RM65UV3A",
-  "Grandmaster": "P-7WC176265L221313GM7Y3DXI"
+  "Champ": "P-9UR452758A657971KNCLU56Y",
+  "Grandmaster": "P-17E41445D70627342NCLVAWY"
 };
 
 app.post("/api/paypal/subscription", async (req, res) => {
