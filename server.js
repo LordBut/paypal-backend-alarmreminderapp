@@ -18,7 +18,7 @@ const {
   FIREBASE_PRIVATE_KEY,
   PAYPAL_CLIENT_ID,
   PAYPAL_SECRET,
-  PAYPAL_API = "https://api-m.sandbox.paypal.com",
+  PAYPAL_API = "https://api-m.paypal.com",
   PORT = 3000,
 } = process.env;
 
@@ -354,8 +354,8 @@ app.get("/", (req, res) => {
 
 // Define valid plan IDs
 const validPlanIds = {
-  "Champ": "P-86R0994779441710RM65UV3A",
-  "Grandmaster": "P-7WC176265L221313GM7Y3DXI"
+  "Champ": "P-9UR452758A657971KNCLU56Y",
+  "Grandmaster": "P-17E41445D70627342NCLVAWY"
 };
 
 app.post("/api/paypal/subscription", async (req, res) => {
@@ -508,7 +508,26 @@ app.post("/paypal/webhook", async (req, res) => {
             subscriptionStatus: "payment_failed",
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
           }, { merge: true });
+
           console.log(`❌ Payment failed for user: ${userId}`);
+
+          // 🔁 Automatically cancel after failure
+          try {
+            const token = await getPayPalAccessToken();
+            await axios.post(
+              `${PAYPAL_API}/v1/billing/subscriptions/${subscriptionId}/cancel`,
+              { reason: "Auto-cancelled after failed payment" },
+              {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json"
+                }
+              }
+            );
+            console.log(`🛑 Auto-cancelled PayPal subscription ${subscriptionId} after payment failure`);
+          } catch (err) {
+            console.error("❌ Failed to auto-cancel PayPal subscription:", err.message);
+          }
         }
         break;
 

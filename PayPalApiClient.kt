@@ -1,4 +1,4 @@
-package com.alarmreminderapp.backend
+package com.alarmreminderapp
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -42,15 +42,12 @@ class PayPalApiClient {
             cachedAccessToken = jsonResponse.getString("access_token")
             cachedAccessToken
           } else {
-            Log.e(TAG, "Token Error ${response.code}: $responseBody")
             null
           }
         }
       } catch (e: IOException) {
-        Log.e(TAG, "Token IOException: ${e.message}")
         null
       } catch (e: Exception) {
-        Log.e(TAG, "Token Exception: ${e.message}")
         null
       }
     }
@@ -61,7 +58,7 @@ class PayPalApiClient {
     return withContext(Dispatchers.IO) {
       try {
         val accessToken = getAccessToken()
-        val url = "https://api-m.sandbox.paypal.com/v1/billing/subscriptions/$subscriptionId"
+        val url = "https://api-m.paypal.com/v1/billing/subscriptions/$subscriptionId"
         val request = Request.Builder()
           .url(url)
           .addHeader("Authorization", "Bearer $accessToken")
@@ -70,7 +67,6 @@ class PayPalApiClient {
 
         client.newCall(request).execute().use { response ->
           if (!response.isSuccessful) {
-            Log.e(TAG, "❌ Failed to fetch subscription details: ${response.code}")
             return@withContext null
           }
 
@@ -87,7 +83,6 @@ class PayPalApiClient {
           )
         }
       } catch (e: Exception) {
-        Log.e(TAG, "❌ Exception in getSubscriptionDetails: ${e.message}")
         null
       }
     }
@@ -127,15 +122,12 @@ class PayPalApiClient {
         if (response.isSuccessful) {
           JSONObject(responseBody)
         } else {
-          Log.e(TAG, "❌ Create Subscription Error ${response.code}: $responseBody")
           null
         }
       }
     } catch (e: IOException) {
-      Log.e(TAG, "❌ Create Subscription IOException: ${e.message}")
       null
     } catch (e: Exception) {
-      Log.e(TAG, "❌ Create Subscription Exception: ${e.message}")
       null
     }
   }
@@ -154,19 +146,14 @@ class PayPalApiClient {
 
         client.newCall(request).execute().use { response ->
           if (response.isSuccessful) {
-            Log.d(TAG, "✅ Subscription $subscriptionId cancelled successfully.")
             true
           } else {
-            val responseBody = response.body?.string() ?: ""
-            Log.e(TAG, "❌ Cancel Subscription Error ${response.code}: $responseBody")
             false
           }
         }
       } catch (e: IOException) {
-        Log.e(TAG, "❌ Cancel Subscription IOException: ${e.message}")
         false
       } catch (e: Exception) {
-        Log.e(TAG, "❌ Cancel Subscription Exception: ${e.message}")
         false
       }
     }
@@ -192,19 +179,14 @@ class PayPalApiClient {
 
         client.newCall(request).execute().use { response ->
           if (response.isSuccessful) {
-            Log.d(TAG, "✅ Subscription $subscriptionId success notified.")
             true
           } else {
-            val responseBody = response.body?.string() ?: ""
-            Log.e(TAG, "❌ Failed to notify backend: ${response.code} - $responseBody")
             false
           }
         }
       } catch (e: IOException) {
-        Log.e(TAG, "❌ Notify Success IOException: ${e.message}")
         false
       } catch (e: Exception) {
-        Log.e(TAG, "❌ Notify Success Exception: ${e.message}")
         false
       }
     }
