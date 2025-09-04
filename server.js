@@ -120,6 +120,33 @@ app.post("/api/googleplay/verify", async (req, res) => {
   }
 });
 
+// ✅ Cancel subscription via Google Play
+app.post("/api/googleplay/cancel", async (req, res) => {
+  const { productId, purchaseToken, userId } = req.body;
+
+  if (!productId || !purchaseToken || !userId) {
+    return res.status(400).json({ error: "Missing required fields." });
+  }
+
+  try {
+    const authClient = await auth.getClient();
+    await playdeveloper.purchases.subscriptions.cancel({
+      packageName: PLAY_PACKAGE_NAME,
+      subscriptionId: productId,
+      token: purchaseToken,
+      auth: authClient,
+    });
+
+    // Update Firestore immediately
+    await updateFirestoreWithGooglePlay(userId, productId, purchaseToken, "cancelled");
+
+    res.json({ status: "cancelled" });
+  } catch (err) {
+    console.error("❌ Cancel subscription error:", err.response?.data || err.message);
+    res.status(500).json({ error: "Cancellation failed." });
+  }
+});
+
 // ✅ RTDN (Real-time Developer Notifications) webhook
 app.post("/api/googleplay/rtnd", async (req, res) => {
   try {
