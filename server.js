@@ -120,7 +120,7 @@ app.post("/api/googleplay/verify", async (req, res) => {
   }
 });
 
-// ✅ Cancel subscription via Google Play
+// ✅ Cancel subscription via Google Play (with re-verify)
 app.post("/api/googleplay/cancel", async (req, res) => {
   const { productId, purchaseToken, userId } = req.body;
 
@@ -130,6 +130,8 @@ app.post("/api/googleplay/cancel", async (req, res) => {
 
   try {
     const authClient = await auth.getClient();
+
+    // Cancel auto-renew
     await playdeveloper.purchases.subscriptions.cancel({
       packageName: PLAY_PACKAGE_NAME,
       subscriptionId: productId,
@@ -137,10 +139,33 @@ app.post("/api/googleplay/cancel", async (req, res) => {
       auth: authClient,
     });
 
-    // Update Firestore immediately
-    await updateFirestoreWithGooglePlay(userId, productId, purchaseToken, "cancelled");
+    // 🔄 Re-verify subscription state after cancellation
+    const result = await playdeveloper.purchases.subscriptions.get({
+      packageName: PLAY_PACKAGE_NAME,
+      subscriptionId: productId,
+      token: purchaseToken,
+      auth: authClient,
+    });
 
-    res.json({ status: "cancelled" });
+    const data = result.data;
+    const expiryTime = parseInt(data.expiryTimeMillis || "0", 10);
+    const paymentState = data.paymentState;
+    const cancelReason = data.cancelReason;
+
+    let status = "cancelled";
+    if (expiryTime > Date.now()) {
+      // still within paid period, but non-renewing
+      status = paymentState === 1 ? "pending" : "cancelled";
+    }
+
+    await updateFirestoreWithGooglePlay(userId, productId, purchaseToken, status);
+
+    res.json({
+      status,
+      expiryTimeMillis: expiryTime,
+      paymentState,
+      cancelReason,
+    });
   } catch (err) {
     console.error("❌ Cancel subscription error:", err.response?.data || err.message);
     res.status(500).json({ error: "Cancellation failed." });
