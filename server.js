@@ -5,6 +5,7 @@ const cors = require("cors");
 const admin = require("firebase-admin");
 const path = require("path");
 const { google } = require("googleapis");
+const { GoogleAuth } = require("google-auth-library");
 
 // 🔐 Firebase Admin Initialization
 const {
@@ -32,19 +33,26 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// 🔹 Google Play API Setup (using JSON from env variable)
+// 🔹 Google API Setup (using JSON from env variable)
 if (!GOOGLE_APPLICATION_CREDENTIALS_JSON) {
   throw new Error("❌ Missing GOOGLE_APPLICATION_CREDENTIALS_JSON env variable.");
 }
 
 const serviceAccount = JSON.parse(GOOGLE_APPLICATION_CREDENTIALS_JSON);
 
-const auth = new google.auth.GoogleAuth({
+// 🔹 Auth clients
+const billingAuth = new google.auth.GoogleAuth({
   credentials: serviceAccount,
   scopes: ["https://www.googleapis.com/auth/androidpublisher"],
 });
 
+const integrityAuth = new GoogleAuth({
+  credentials: serviceAccount,
+  scopes: ["https://www.googleapis.com/auth/playintegrity"],
+});
+
 const playdeveloper = google.androidpublisher("v3");
+const playIntegrity = google.playintegrity("v1");
 
 // 🔧 Firestore updater for Google Play subscriptions
 async function updateFirestoreWithGooglePlay(uid, productId, purchaseToken, status) {
@@ -79,21 +87,45 @@ async function updateFirestoreWithGooglePlay(uid, productId, purchaseToken, stat
   });
 }
 
-// ✅ Verify subscription with Google Play Developer API
+// ✅ Verify subscription with Google Play Developer API + Play Integrity
 app.post("/api/googleplay/verify", async (req, res) => {
-  const { packageName, productId, purchaseToken, userId } = req.body;
+  const { packageName, productId, purchaseToken, userId, integrityToken } = req.body;
 
-  if (!packageName || !productId || !purchaseToken || !userId) {
+  if (!packageName || !productId || !purchaseToken || !userId || !integrityToken) {
     return res.status(400).json({ error: "Missing required fields." });
   }
 
   try {
-    const authClient = await auth.getClient();
+    // 1️⃣ Verify Play Integrity token
+    const integrityClient = await integrityAuth.getClient();
+    const integrityResponse = await playIntegrity.v1.decodeIntegrityToken({
+      packageName,
+      resource: { integrityToken },
+      auth: integrityClient,
+    });
+
+    const decoded = integrityResponse.data.tokenPayloadExternal || {};
+    const deviceIntegrity = decoded.deviceIntegrity?.deviceRecognitionVerdict || [];
+    const appIntegrity = decoded.appIntegrity?.appRecognitionVerdict || [];
+    const licensingVerdict = decoded.accountDetails?.appLicensingVerdict;
+
+    const isTrusted =
+      deviceIntegrity.includes("MEETS_DEVICE_INTEGRITY") &&
+      appIntegrity.includes("PLAY_RECOGNIZED") &&
+      licensingVerdict === "LICENSED";
+
+    if (!isTrusted) {
+      console.warn("⚠️ Integrity check failed:", { deviceIntegrity, appIntegrity, licensingVerdict });
+      return res.status(403).json({ error: "Device or app integrity check failed." });
+    }
+
+    // 2️⃣ Verify subscription with Play Developer API
+    const billingClient = await billingAuth.getClient();
     const result = await playdeveloper.purchases.subscriptions.get({
       packageName,
       subscriptionId: productId,
       token: purchaseToken,
-      auth: authClient,
+      auth: billingClient,
     });
 
     const data = result.data;
@@ -113,6 +145,7 @@ app.post("/api/googleplay/verify", async (req, res) => {
       expiryTimeMillis: expiryTime,
       paymentState,
       cancelReason,
+      integrity: { deviceIntegrity, appIntegrity, licensingVerdict },
     });
   } catch (err) {
     console.error("❌ Google Play verify error:", err.response?.data || err.message);
@@ -129,7 +162,7 @@ app.post("/api/googleplay/cancel", async (req, res) => {
   }
 
   try {
-    const authClient = await auth.getClient();
+    const authClient = await billingAuth.getClient();
     await playdeveloper.purchases.subscriptions.cancel({
       packageName: PLAY_PACKAGE_NAME,
       subscriptionId: productId,
@@ -168,12 +201,12 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
       const userId = snapshot.docs[0].ref.parent.parent.id;
 
       // Re-verify with Play Developer API
-      const authClient = await auth.getClient();
+      const billingClient = await billingAuth.getClient();
       const result = await playdeveloper.purchases.subscriptions.get({
         packageName: PLAY_PACKAGE_NAME,
         subscriptionId,
         token: purchaseToken,
-        auth: authClient,
+        auth: billingClient,
       });
 
       const data = result.data;
@@ -204,7 +237,7 @@ app.use(
 
 // ✅ Root route
 app.get("/", (req, res) => {
-  res.send("🚀 Server is running. Google Play Billing API ready.");
+  res.send("🚀 Server is running. Google Play Billing API + Play Integrity ready.");
 });
 
 // ✅ Start Express Server
