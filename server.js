@@ -1,5 +1,5 @@
 // ================================
-// server.js — Google Play Billing (Audit-Only Backend)
+// server.js — Google Play Billing (RTDN Entitlement Backend)
 // ================================
 
 const express = require("express");
@@ -68,29 +68,64 @@ const playdeveloper = google.androidpublisher("v3");
 const playIntegrity = google.playintegrity("v1");
 
 // ================================
-// Helper: Write AUDIT record ONLY
+// Helper: Update Firestore Entitlement
 // ================================
-async function writeAuditRecord({
+async function updateFirestoreEntitlement({
   userId,
   productId,
   purchaseToken,
   status,
-  source,
-  extra = {},
 }) {
+  const userRef = db.collection("users").doc(userId);
+
+  const tier =
+    productId === "genevolut_grandmaster"
+      ? "Grandmaster"
+      : productId === "genevolut_champ"
+      ? "Champ"
+      : "Free";
+
+  const normalizedTier = status === "active" ? tier : "Free";
+
+  await userRef.set(
+    {
+      subscription_tier: normalizedTier,
+      subscriptionStatus: status,
+      provider: "google_play",
+      productId,
+      purchaseToken,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  await userRef
+    .collection("subscriptions")
+    .doc("current")
+    .set(
+      {
+        tier: normalizedTier,
+        status,
+        productId,
+        purchaseToken,
+        timestamp: Date.now(),
+      },
+      { merge: true }
+    );
+}
+
+// ================================
+// Helper: Write Audit Record
+// ================================
+async function writeAuditRecord(data) {
   await db.collection("purchase_audits").add({
-    userId,
-    productId,
-    purchaseToken,
-    status,
-    source,
-    extra,
+    ...data,
     verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 }
 
 // ================================
-// VERIFY ENDPOINT (Audit-Only)
+// VERIFY ENDPOINT (Integrity + Audit)
 // ================================
 app.post("/api/googleplay/verify", async (req, res) => {
   const { packageName, productId, purchaseToken, userId, integrityToken } = req.body;
@@ -100,9 +135,7 @@ app.post("/api/googleplay/verify", async (req, res) => {
   }
 
   try {
-    // ----------------------------
-    // 1️⃣ Play Integrity
-    // ----------------------------
+    // 1️⃣ Integrity
     const integrityClient = await integrityAuth.getClient();
     const integrityResp = await playIntegrity.v1.decodeIntegrityToken({
       packageName,
@@ -127,15 +160,11 @@ app.post("/api/googleplay/verify", async (req, res) => {
         purchaseToken,
         status: "integrity_failed",
         source: "verify",
-        extra: { deviceIntegrity, appIntegrity, licensingVerdict },
       });
-
       return res.status(403).json({ error: "Integrity check failed." });
     }
 
-    // ----------------------------
-    // 2️⃣ Play Developer API
-    // ----------------------------
+    // 2️⃣ Play Billing
     const billingClient = await billingAuth.getClient();
     const result = await playdeveloper.purchases.subscriptions.get({
       packageName: PLAY_PACKAGE_NAME,
@@ -151,42 +180,28 @@ app.post("/api/googleplay/verify", async (req, res) => {
 
     let status = "cancelled";
     if (expiry > Date.now()) {
-      status = paymentState === 1 && cancelReason == null ? "active" : "pending";
+      status = paymentState === 1 && cancelReason == null
+        ? "active"
+        : "pending";
     }
 
-    // ----------------------------
-    // 3️⃣ AUDIT ONLY (NO ENTITLEMENT)
-    // ----------------------------
     await writeAuditRecord({
       userId,
       productId,
       purchaseToken,
       status,
       source: "verify",
-      extra: {
-        expiry,
-        paymentState,
-        cancelReason,
-        deviceIntegrity,
-        appIntegrity,
-        licensingVerdict,
-      },
     });
 
-    return res.json({
-      status,
-      expiryTimeMillis: expiry,
-      paymentState,
-      cancelReason,
-    });
+    res.json({ status, expiryTimeMillis: expiry });
   } catch (err) {
-    console.error("❌ Verify error:", err.response?.data || err.message);
-    return res.status(500).json({ error: "Verification failed." });
+    console.error("❌ Verify error:", err.message);
+    res.status(500).json({ error: "Verification failed." });
   }
 });
 
 // ================================
-// RTDN (Audit-Only)
+// RTDN — ENTITLEMENT AUTHORITY
 // ================================
 app.post("/api/googleplay/rtnd", async (req, res) => {
   try {
@@ -199,6 +214,21 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
 
     const { subscriptionId, purchaseToken, notificationType } = sub;
 
+    // 🔎 Find user by purchaseToken
+    const snap = await db
+      .collectionGroup("subscriptions")
+      .where("purchaseToken", "==", purchaseToken)
+      .limit(1)
+      .get();
+
+    if (snap.empty) {
+      console.warn("RTDN: No user found for token", purchaseToken);
+      return res.sendStatus(200);
+    }
+
+    const userId = snap.docs[0].ref.parent.parent.id;
+
+    // 🔁 Re-verify with Play
     const billingClient = await billingAuth.getClient();
     const result = await playdeveloper.purchases.subscriptions.get({
       packageName: PLAY_PACKAGE_NAME,
@@ -214,27 +244,33 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
 
     let status = "cancelled";
     if (expiry > Date.now()) {
-      status = paymentState === 1 && cancelReason == null ? "active" : "pending";
+      status = paymentState === 1 && cancelReason == null
+        ? "active"
+        : "pending";
     }
 
+    // ✅ UPDATE FIRESTORE (THIS IS THE KEY)
+    await updateFirestoreEntitlement({
+      userId,
+      productId: subscriptionId,
+      purchaseToken,
+      status,
+    });
+
+    // ✅ AUDIT
     await writeAuditRecord({
-      userId: null, // optional lookup later
+      userId,
       productId: subscriptionId,
       purchaseToken,
       status,
       source: "rtdn",
-      extra: {
-        notificationType,
-        expiry,
-        paymentState,
-        cancelReason,
-      },
+      extra: { notificationType },
     });
 
     res.sendStatus(200);
   } catch (err) {
     console.error("❌ RTDN error:", err.message);
-    res.sendStatus(200); // Always ACK
+    res.sendStatus(200);
   }
 });
 
@@ -247,7 +283,7 @@ app.use(
 );
 
 app.get("/", (_, res) => {
-  res.send("🚀 Google Play Billing backend (audit-only) running.");
+  res.send("🚀 Google Play Billing RTDN backend running.");
 });
 
 // ================================
