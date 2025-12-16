@@ -47,7 +47,13 @@ const db = admin.firestore();
 // ================================
 const app = express();
 app.use(cors());
-app.use(bodyParser.json());
+app.use(
+  bodyParser.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 
 // ================================
 // Google API Clients
@@ -125,7 +131,7 @@ async function writeAuditRecord(data) {
 }
 
 // ================================
-// VERIFY ENDPOINT (Integrity + Audit)
+// VERIFY ENDPOINT (Integrity + Audit ONLY — NO ENTITLEMENT)
 // ================================
 app.post("/api/googleplay/verify", async (req, res) => {
   const { packageName, productId, purchaseToken, userId, integrityToken } = req.body;
@@ -214,6 +220,25 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
 
     const { subscriptionId, purchaseToken, notificationType } = sub;
 
+    console.log("📬 RTDN received:", {
+      subscriptionId,
+      purchaseToken,
+      notificationType,
+    });
+
+    // 🔁 IDEMPOTENCY CHECK
+    const alreadyProcessed = await db
+      .collection("purchase_audits")
+      .where("purchaseToken", "==", purchaseToken)
+      .where("source", "==", "rtdn")
+      .limit(1)
+      .get();
+
+    if (!alreadyProcessed.empty) {
+      console.log("🔁 RTDN already processed:", purchaseToken);
+      return res.sendStatus(200);
+    }
+
     // 🔎 Find user by purchaseToken
     const snap = await db
       .collectionGroup("subscriptions")
@@ -249,7 +274,7 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
         : "pending";
     }
 
-    // ✅ UPDATE FIRESTORE (THIS IS THE KEY)
+    // ✅ UPDATE FIRESTORE (AUTHORITY)
     await updateFirestoreEntitlement({
       userId,
       productId: subscriptionId,
@@ -257,7 +282,7 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
       status,
     });
 
-    // ✅ AUDIT
+    // ✅ AUDIT (AFTER update)
     await writeAuditRecord({
       userId,
       productId: subscriptionId,
@@ -270,7 +295,7 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
     res.sendStatus(200);
   } catch (err) {
     console.error("❌ RTDN error:", err.message);
-    res.sendStatus(200);
+    res.sendStatus(200); // Always ACK
   }
 });
 
