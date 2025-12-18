@@ -43,17 +43,14 @@ admin.initializeApp({
 const db = admin.firestore();
 
 // ================================
-// Express Setup
+// Express Setup (RTDN SAFE)
 // ================================
 const app = express();
 app.use(cors());
-app.use(
-  bodyParser.json({
-    verify: (req, res, buf) => {
-      req.rawBody = buf;
-    },
-  })
-);
+
+// ✅ REQUIRED: support Pub/Sub raw payloads
+app.use(bodyParser.json({ type: ["application/json"] }));
+app.use(bodyParser.raw({ type: "*/*" }));
 
 // ================================
 // Google API Clients
@@ -74,7 +71,7 @@ const playdeveloper = google.androidpublisher("v3");
 const playIntegrity = google.playintegrity("v1");
 
 // ================================
-// Helper: Update Firestore Entitlement
+// Helper: Update Firestore Entitlement (AUTHORITY)
 // ================================
 async function updateFirestoreEntitlement({
   userId,
@@ -114,7 +111,7 @@ async function updateFirestoreEntitlement({
         status,
         productId,
         purchaseToken,
-        timestamp: Date.now(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
@@ -131,10 +128,12 @@ async function writeAuditRecord(data) {
 }
 
 // ================================
-// VERIFY ENDPOINT (Integrity + Audit ONLY — NO ENTITLEMENT)
+// VERIFY ENDPOINT
+// Integrity + Audit ONLY (Client helper)
 // ================================
 app.post("/api/googleplay/verify", async (req, res) => {
-  const { packageName, productId, purchaseToken, userId, integrityToken } = req.body;
+  const { packageName, productId, purchaseToken, userId, integrityToken } =
+    req.body || {};
 
   if (!packageName || !productId || !purchaseToken || !userId || !integrityToken) {
     return res.status(400).json({ error: "Missing required fields." });
@@ -150,9 +149,12 @@ app.post("/api/googleplay/verify", async (req, res) => {
     });
 
     const payload = integrityResp.data.tokenPayloadExternal || {};
-    const deviceIntegrity = payload.deviceIntegrity?.deviceRecognitionVerdict || [];
-    const appIntegrity = payload.appIntegrity?.appRecognitionVerdict || [];
-    const licensingVerdict = payload.accountDetails?.appLicensingVerdict;
+    const deviceIntegrity =
+      payload.deviceIntegrity?.deviceRecognitionVerdict || [];
+    const appIntegrity =
+      payload.appIntegrity?.appRecognitionVerdict || [];
+    const licensingVerdict =
+      payload.accountDetails?.appLicensingVerdict;
 
     const trusted =
       deviceIntegrity.includes("MEETS_DEVICE_INTEGRITY") &&
@@ -170,7 +172,7 @@ app.post("/api/googleplay/verify", async (req, res) => {
       return res.status(403).json({ error: "Integrity check failed." });
     }
 
-    // 2️⃣ Play Billing
+    // 2️⃣ Billing verify
     const billingClient = await billingAuth.getClient();
     const result = await playdeveloper.purchases.subscriptions.get({
       packageName: PLAY_PACKAGE_NAME,
@@ -186,9 +188,10 @@ app.post("/api/googleplay/verify", async (req, res) => {
 
     let status = "cancelled";
     if (expiry > Date.now()) {
-      status = paymentState === 1 && cancelReason == null
-        ? "active"
-        : "pending";
+      status =
+        paymentState === 1 && cancelReason == null
+          ? "active"
+          : "pending";
     }
 
     await writeAuditRecord({
@@ -201,22 +204,20 @@ app.post("/api/googleplay/verify", async (req, res) => {
 
     res.json({ status, expiryTimeMillis: expiry });
   } catch (err) {
-    console.error("❌ Verify error:", err.message);
+    console.error("❌ Verify error:", err);
     res.status(500).json({ error: "Verification failed." });
   }
 });
 
 // ================================
-// RTDN — ENTITLEMENT AUTHORITY (FINAL)
+// RTDN — ENTITLEMENT AUTHORITY
 // ================================
 app.post("/api/googleplay/rtnd", async (req, res) => {
   try {
-    // 🔎 RAW LOG — REQUIRED for Render debugging
+    // 🔎 RAW LOG (Render debugging)
     console.log("📥 RTDN raw body:", req.body);
 
-    // ----------------------------
-    // 1️⃣ Parse Pub/Sub payload safely
-    // ----------------------------
+    // 1️⃣ Parse Pub/Sub payload
     const body = Buffer.isBuffer(req.body)
       ? JSON.parse(req.body.toString("utf8"))
       : req.body;
@@ -244,24 +245,16 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
       notificationType,
     });
 
-    // ----------------------------
-    // 2️⃣ Idempotency guard
-    // ----------------------------
+    // 2️⃣ Idempotency (token + type)
     const auditId = `${purchaseToken}_${notificationType}`;
+    const auditRef = db.collection("purchase_audits").doc(auditId);
 
-    const alreadyProcessed = await db
-      .collection("purchase_audits")
-      .doc(auditId)
-      .get();
-
-    if (alreadyProcessed.exists) {
+    if ((await auditRef.get()).exists) {
       console.log("🔁 RTDN already processed:", auditId);
       return res.sendStatus(200);
     }
 
-    // ----------------------------
-    // 3️⃣ Find user by purchaseToken
-    // ----------------------------
+    // 3️⃣ Find user
     const snap = await db
       .collectionGroup("subscriptions")
       .where("purchaseToken", "==", purchaseToken)
@@ -269,17 +262,14 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
       .get();
 
     if (snap.empty) {
-      console.warn("⚠️ RTDN: No user found for token:", purchaseToken);
+      console.warn("⚠️ RTDN no user for token:", purchaseToken);
       return res.sendStatus(200);
     }
 
     const userId = snap.docs[0].ref.parent.parent.id;
 
-    // ----------------------------
     // 4️⃣ Re-verify with Play
-    // ----------------------------
     const billingClient = await billingAuth.getClient();
-
     const result = await playdeveloper.purchases.subscriptions.get({
       packageName: PLAY_PACKAGE_NAME,
       subscriptionId,
@@ -300,50 +290,37 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
           : "pending";
     }
 
-    console.log("🔐 RTDN resolved status:", {
-      userId,
-      status,
-      expiry,
-    });
+    console.log("🔐 RTDN resolved:", { userId, status, expiry });
 
-    // ----------------------------
-    // 5️⃣ UPDATE FIRESTORE (AUTHORITY)
-    // ----------------------------
+    // 5️⃣ Update Firestore (AUTHORITY)
     await updateFirestoreEntitlement({
       userId,
-      productId: subscriptionId, // assumes no base plans
+      productId: subscriptionId,
       purchaseToken,
       status,
     });
 
-    // ----------------------------
-    // 6️⃣ AUDIT (WRITE ONCE)
-    // ----------------------------
-    await db
-      .collection("purchase_audits")
-      .doc(auditId)
-      .set({
-        userId,
-        productId: subscriptionId,
-        purchaseToken,
-        status,
-        source: "rtdn",
-        extra: {
-          notificationType,
-          expiry,
-          paymentState,
-          cancelReason,
-        },
-        verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+    // 6️⃣ Audit (write-once)
+    await auditRef.set({
+      userId,
+      productId: subscriptionId,
+      purchaseToken,
+      status,
+      source: "rtdn",
+      extra: {
+        notificationType,
+        expiry,
+        paymentState,
+        cancelReason,
+      },
+      verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
 
-    console.log("✅ RTDN processed successfully:", auditId);
+    console.log("✅ RTDN processed:", auditId);
     return res.sendStatus(200);
-
   } catch (err) {
     console.error("❌ RTDN fatal error:", err);
-    // ⚠️ Always ACK Google even on failure
-    return res.sendStatus(200);
+    return res.sendStatus(200); // Always ACK
   }
 });
 
