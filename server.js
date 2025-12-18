@@ -207,39 +207,61 @@ app.post("/api/googleplay/verify", async (req, res) => {
 });
 
 // ================================
-// RTDN — ENTITLEMENT AUTHORITY
+// RTDN — ENTITLEMENT AUTHORITY (FINAL)
 // ================================
 app.post("/api/googleplay/rtnd", async (req, res) => {
   try {
-    const message = JSON.parse(
-      Buffer.from(req.body.message.data, "base64").toString("utf8")
+    // 🔎 RAW LOG — REQUIRED for Render debugging
+    console.log("📥 RTDN raw body:", req.body);
+
+    // ----------------------------
+    // 1️⃣ Parse Pub/Sub payload safely
+    // ----------------------------
+    const body = Buffer.isBuffer(req.body)
+      ? JSON.parse(req.body.toString("utf8"))
+      : req.body;
+
+    if (!body?.message?.data) {
+      console.warn("⚠️ RTDN missing message.data");
+      return res.sendStatus(200);
+    }
+
+    const decoded = JSON.parse(
+      Buffer.from(body.message.data, "base64").toString("utf8")
     );
 
-    const sub = message.subscriptionNotification;
-    if (!sub) return res.sendStatus(200);
+    const sub = decoded.subscriptionNotification;
+    if (!sub) {
+      console.warn("⚠️ RTDN not a subscription notification");
+      return res.sendStatus(200);
+    }
 
     const { subscriptionId, purchaseToken, notificationType } = sub;
 
-    console.log("📬 RTDN received:", {
+    console.log("📬 RTDN decoded:", {
       subscriptionId,
       purchaseToken,
       notificationType,
     });
 
-    // 🔁 IDEMPOTENCY CHECK
+    // ----------------------------
+    // 2️⃣ Idempotency guard
+    // ----------------------------
+    const auditId = `${purchaseToken}_${notificationType}`;
+
     const alreadyProcessed = await db
       .collection("purchase_audits")
-      .where("purchaseToken", "==", purchaseToken)
-      .where("source", "==", "rtdn")
-      .limit(1)
+      .doc(auditId)
       .get();
 
-    if (!alreadyProcessed.empty) {
-      console.log("🔁 RTDN already processed:", purchaseToken);
+    if (alreadyProcessed.exists) {
+      console.log("🔁 RTDN already processed:", auditId);
       return res.sendStatus(200);
     }
 
-    // 🔎 Find user by purchaseToken
+    // ----------------------------
+    // 3️⃣ Find user by purchaseToken
+    // ----------------------------
     const snap = await db
       .collectionGroup("subscriptions")
       .where("purchaseToken", "==", purchaseToken)
@@ -247,14 +269,17 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
       .get();
 
     if (snap.empty) {
-      console.warn("RTDN: No user found for token", purchaseToken);
+      console.warn("⚠️ RTDN: No user found for token:", purchaseToken);
       return res.sendStatus(200);
     }
 
     const userId = snap.docs[0].ref.parent.parent.id;
 
-    // 🔁 Re-verify with Play
+    // ----------------------------
+    // 4️⃣ Re-verify with Play
+    // ----------------------------
     const billingClient = await billingAuth.getClient();
+
     const result = await playdeveloper.purchases.subscriptions.get({
       packageName: PLAY_PACKAGE_NAME,
       subscriptionId,
@@ -269,33 +294,56 @@ app.post("/api/googleplay/rtnd", async (req, res) => {
 
     let status = "cancelled";
     if (expiry > Date.now()) {
-      status = paymentState === 1 && cancelReason == null
-        ? "active"
-        : "pending";
+      status =
+        paymentState === 1 && cancelReason == null
+          ? "active"
+          : "pending";
     }
 
-    // ✅ UPDATE FIRESTORE (AUTHORITY)
+    console.log("🔐 RTDN resolved status:", {
+      userId,
+      status,
+      expiry,
+    });
+
+    // ----------------------------
+    // 5️⃣ UPDATE FIRESTORE (AUTHORITY)
+    // ----------------------------
     await updateFirestoreEntitlement({
       userId,
-      productId: subscriptionId,
+      productId: subscriptionId, // assumes no base plans
       purchaseToken,
       status,
     });
 
-    // ✅ AUDIT (AFTER update)
-    await writeAuditRecord({
-      userId,
-      productId: subscriptionId,
-      purchaseToken,
-      status,
-      source: "rtdn",
-      extra: { notificationType },
-    });
+    // ----------------------------
+    // 6️⃣ AUDIT (WRITE ONCE)
+    // ----------------------------
+    await db
+      .collection("purchase_audits")
+      .doc(auditId)
+      .set({
+        userId,
+        productId: subscriptionId,
+        purchaseToken,
+        status,
+        source: "rtdn",
+        extra: {
+          notificationType,
+          expiry,
+          paymentState,
+          cancelReason,
+        },
+        verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
 
-    res.sendStatus(200);
+    console.log("✅ RTDN processed successfully:", auditId);
+    return res.sendStatus(200);
+
   } catch (err) {
-    console.error("❌ RTDN error:", err.message);
-    res.sendStatus(200); // Always ACK
+    console.error("❌ RTDN fatal error:", err);
+    // ⚠️ Always ACK Google even on failure
+    return res.sendStatus(200);
   }
 });
 
